@@ -52,29 +52,31 @@ func main() {
 	authSvc := auth.NewService(cfg.JWT)
 
 	// ── Repositories ─────────────────────────────────────
-	userRepo           := repository.NewUserRepo(database)
-	projectRepo        := repository.NewProjectRepo(database)
-	taskRepo           := repository.NewTaskRepo(database)
-	dashRepo           := repository.NewDashboardRepo(database)
-	pipelineRepo       := repository.NewPipelineRepo(database)
-	orderRepo          := repository.NewOrderRepo(database)
-	estimateRepo       := repository.NewEstimateRepo(database)
-	detailEstimateRepo := repository.NewDetailEstimateRepo(database)
-	warehouseRepo      := repository.NewWarehouseRepo(database)
+	userRepo            := repository.NewUserRepo(database)
+	projectRepo         := repository.NewProjectRepo(database)
+	taskRepo            := repository.NewTaskRepo(database)
+	dashRepo            := repository.NewDashboardRepo(database)
+	pipelineRepo        := repository.NewPipelineRepo(database)
+	orderRepo           := repository.NewOrderRepo(database)
+	estimateRepo        := repository.NewEstimateRepo(database)
+	detailEstimateRepo  := repository.NewDetailEstimateRepo(database)
+	warehouseRepo       := repository.NewWarehouseRepo(database)
+	clientBalanceRepo   := repository.NewClientBalanceRepo(database)
 
 	// ── Handlers ─────────────────────────────────────────
-	authH           := handlers.NewAuthHandler(userRepo, authSvc)
-	usersH          := handlers.NewUsersHandler(userRepo)
-	dashH           := handlers.NewDashboardHandler(dashRepo)
-	projH           := handlers.NewProjectsHandler(projectRepo)
-	tasksH          := handlers.NewTasksHandler(taskRepo)
-	pipelineH       := handlers.NewPipelineHandler(pipelineRepo)
-	uploadH         := handlers.NewUploadHandler(minioSvc, pipelineRepo)
+	authH            := handlers.NewAuthHandler(userRepo, authSvc)
+	usersH           := handlers.NewUsersHandler(userRepo)
+	dashH            := handlers.NewDashboardHandler(dashRepo)
+	projH            := handlers.NewProjectsHandler(projectRepo)
+	tasksH           := handlers.NewTasksHandler(taskRepo)
+	pipelineH        := handlers.NewPipelineHandler(pipelineRepo)
+	uploadH          := handlers.NewUploadHandler(minioSvc, pipelineRepo)
 	uploadH.SetOrderRepo(orderRepo)
-	orderH          := handlers.NewOrderHandler(orderRepo)
-	estimateH       := handlers.NewEstimateHandler(estimateRepo)
-	detailEstimateH := handlers.NewDetailEstimateHandler(detailEstimateRepo)
-	warehouseH      := handlers.NewWarehouseHandler(warehouseRepo)
+	orderH           := handlers.NewOrderHandler(orderRepo)
+	estimateH        := handlers.NewEstimateHandler(estimateRepo)
+	detailEstimateH  := handlers.NewDetailEstimateHandler(detailEstimateRepo)
+	warehouseH       := handlers.NewWarehouseHandler(warehouseRepo)
+	clientBalanceH   := handlers.NewClientBalanceHandler(clientBalanceRepo)
 
 	// ── Router ───────────────────────────────────────────
 	r := gin.New()
@@ -168,10 +170,17 @@ func main() {
 	// МОДУЛЬ ЗАКАЗОВ
 	// ════════════════════════════════════════════════════
 
-	// Клиенты
+	// Клиенты — CRUD
 	p.GET("/clients",       orderH.ClientList)
 	p.POST("/clients",      middleware.RequireRole("admin", "supervisor", "manager"), orderH.ClientCreate)
 	p.PATCH("/clients/:id", middleware.RequireRole("admin", "supervisor", "manager"), orderH.ClientUpdate)
+
+	// Клиенты — баланс и расчёт (debt должен быть ДО /:id)
+	p.GET("/clients/debt",                          clientBalanceH.DebtList)
+	p.GET("/clients/:id/orders",                    clientBalanceH.ClientOrders)
+	p.GET("/clients/:id/payments",                  clientBalanceH.PaymentHistory)
+	p.POST("/clients/:id/payments",                 middleware.RequireRole("admin", "supervisor", "manager"), clientBalanceH.PaymentCreate)
+	p.DELETE("/clients/:id/payments/:payment_id",   middleware.RequireRole("admin", "supervisor", "manager"), clientBalanceH.PaymentDelete)
 
 	// Прайслист
 	p.GET("/price-list",       orderH.PriceList)
@@ -264,6 +273,11 @@ func main() {
 	p.PATCH("/warehouse/suppliers/:id",  middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierUpdate)
 	p.DELETE("/warehouse/suppliers/:id", middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierDelete)
 
+	// Платежи поставщику (общий расчёт) — ДО /:id/...
+	p.GET("/warehouse/suppliers/:id/payments",                middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentHistory)
+	p.POST("/warehouse/suppliers/:id/payments",               middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentCreate)
+	p.DELETE("/warehouse/suppliers/:id/payments/:payment_id", middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentDelete)
+
 	// Приходные накладные
 	p.GET("/warehouse/receipts",                       warehouseH.ReceiptList)
 	p.GET("/warehouse/receipts/:id",                   warehouseH.ReceiptGet)
@@ -278,13 +292,7 @@ func main() {
 	p.POST("/warehouse/receipts/:id/payments",               middleware.RequireRole("admin", "supervisor"), warehouseH.PaymentCreate)
 	p.DELETE("/warehouse/receipts/:id/payments/:payment_id", middleware.RequireRole("admin", "supervisor"), warehouseH.PaymentDelete)
 
-	 
-	// Платежи поставщику (общий расчёт)
-	p.GET("/warehouse/suppliers/:id/payments",                middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentHistory)
-	p.POST("/warehouse/suppliers/:id/payments",               middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentCreate)
-	p.DELETE("/warehouse/suppliers/:id/payments/:payment_id", middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentDelete)
-	
 	log.Printf("🚀 Server running on :%s", cfg.Server.Port)
 	log.Printf("📖 Swagger UI: http://localhost:%s/swagger/index.html", cfg.Server.Port)
 	r.Run(":" + cfg.Server.Port)
-}	
+}

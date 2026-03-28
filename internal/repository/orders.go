@@ -156,6 +156,7 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 			COALESCE(c.full_name, o.client_name, ''),
 			COALESCE(c.phone, o.client_phone, ''),
 			o.title, COALESCE(o.description,''), COALESCE(o.address,''),
+			COALESCE(o.location_url,''),
 			COALESCE(o.current_stage,''), o.status, o.priority,
 			CAST(o.deadline AS TEXT),
 			CAST(o.started_at AS TEXT),
@@ -214,7 +215,7 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 		rows.Scan(
 			&o.ID, &o.OrderNumber, &o.OrderType,
 			&o.ClientID, &o.ClientName, &o.ClientPhone,
-			&o.Title, &o.Description, &o.Address,
+			&o.Title, &o.Description, &o.Address, &o.LocationURL,
 			&o.CurrentStage, &o.Status, &o.Priority,
 			&deadline, &startedAt,
 			&o.EstimatedCost, &o.FinalCost,
@@ -240,6 +241,7 @@ func (r *OrderRepo) OrderByID(ctx context.Context, id string) (*models.Order, er
 			COALESCE(c.full_name, o.client_name, ''),
 			COALESCE(c.phone, o.client_phone, ''),
 			o.title, COALESCE(o.description,''), COALESCE(o.address,''),
+			COALESCE(o.location_url,''),
 			COALESCE(o.current_stage,''), o.status, o.priority,
 			CAST(o.deadline AS TEXT),
 			CAST(o.started_at AS TEXT),
@@ -260,7 +262,7 @@ func (r *OrderRepo) OrderByID(ctx context.Context, id string) (*models.Order, er
 	`, id).Scan(
 		&o.ID, &o.OrderNumber, &o.OrderType,
 		&o.ClientID, &o.ClientName, &o.ClientPhone,
-		&o.Title, &o.Description, &o.Address,
+		&o.Title, &o.Description, &o.Address, &o.LocationURL,
 		&o.CurrentStage, &o.Status, &o.Priority,
 		&deadline, &startedAt, &finishedAt,
 		&o.EstimatedCost, &o.FinalCost,
@@ -289,25 +291,25 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO orders
 			(order_type, client_id, client_name, client_phone,
-			 title, description, address, priority, deadline,
+			 title, description, address, location_url, priority, deadline,
 			 estimated_cost, manager_id, created_by, status, current_stage)
 		VALUES
 			($1,
 			 NULLIF($2,'')::uuid, NULLIF($3,''), NULLIF($4,''),
-			 $5, $6, $7, $8, NULLIF($9,'')::date,
-			 $10, NULLIF($11,'')::uuid, NULLIF($12,'')::uuid,
+			 $5, $6, $7, NULLIF($8,''), $9, NULLIF($10,'')::date,
+			 $11, NULLIF($12,'')::uuid, NULLIF($13,'')::uuid,
 			 'new', 'intake')
 		RETURNING id
 	`, req.OrderType,
 		clientID, req.ClientName, req.ClientPhone,
-		req.Title, req.Description, req.Address, req.Priority, req.Deadline,
+		req.Title, req.Description, req.Address, req.LocationURL,
+		req.Priority, req.Deadline,
 		req.EstimatedCost, req.ManagerID, createdBy,
 	).Scan(&id)
 	return id, err
 }
 
 func (r *OrderRepo) OrderUpdate(ctx context.Context, id string, req models.UpdateOrderRequest, updatedBy string) error {
-	// Получаем старые данные для сравнения
 	var oldTitle, oldStatus, oldPriority, oldAddress string
 	var oldFinalCost, oldEstimatedCost float64
 	r.db.QueryRowContext(ctx, `
@@ -321,19 +323,21 @@ func (r *OrderRepo) OrderUpdate(ctx context.Context, id string, req models.Updat
 			title          = COALESCE($1, title),
 			description    = COALESCE($2, description),
 			address        = COALESCE($3, address),
-			status         = COALESCE($4, status),
-			priority       = COALESCE($5, priority),
-			deadline       = COALESCE(NULLIF($6,'')::date, deadline),
-			estimated_cost = COALESCE($7, estimated_cost),
-			final_cost     = COALESCE($8, final_cost),
-			manager_id     = COALESCE(NULLIF($9,'')::uuid, manager_id),
-			driver_id      = COALESCE(NULLIF($10,'')::uuid, driver_id),
-			vehicle        = COALESCE($11, vehicle),
-			distance_km    = COALESCE($12, distance_km),
-			fuel_expense   = COALESCE($13, fuel_expense)
-		WHERE id = $14
-	`, req.Title, req.Description, req.Address, req.Status,
-		req.Priority, req.Deadline, req.EstimatedCost, req.FinalCost,
+			location_url   = COALESCE($4, location_url),
+			status         = COALESCE($5, status),
+			priority       = COALESCE($6, priority),
+			deadline       = COALESCE(NULLIF($7,'')::date, deadline),
+			estimated_cost = COALESCE($8, estimated_cost),
+			final_cost     = COALESCE($9, final_cost),
+			manager_id     = COALESCE(NULLIF($10,'')::uuid, manager_id),
+			driver_id      = COALESCE(NULLIF($11,'')::uuid, driver_id),
+			vehicle        = COALESCE($12, vehicle),
+			distance_km    = COALESCE($13, distance_km),
+			fuel_expense   = COALESCE($14, fuel_expense)
+		WHERE id = $15
+	`, req.Title, req.Description, req.Address, req.LocationURL,
+		req.Status, req.Priority, req.Deadline,
+		req.EstimatedCost, req.FinalCost,
 		req.ManagerID, req.DriverID, req.Vehicle,
 		req.DistanceKm, req.FuelExpense, id)
 
@@ -341,14 +345,15 @@ func (r *OrderRepo) OrderUpdate(ctx context.Context, id string, req models.Updat
 		return err
 	}
 
-	// Собираем список изменений
 	var changes []string
-
 	if req.Title != nil && *req.Title != oldTitle {
 		changes = append(changes, fmt.Sprintf("Название: «%s»", *req.Title))
 	}
 	if req.Address != nil && *req.Address != oldAddress {
 		changes = append(changes, fmt.Sprintf("Адрес: %s", *req.Address))
+	}
+	if req.LocationURL != nil && *req.LocationURL != "" {
+		changes = append(changes, "Локация обновлена")
 	}
 	if req.FinalCost != nil && *req.FinalCost != oldFinalCost {
 		changes = append(changes, fmt.Sprintf("Итоговая сумма: %.0f сом.", *req.FinalCost))
@@ -378,7 +383,6 @@ func (r *OrderRepo) OrderUpdate(ctx context.Context, id string, req models.Updat
 		changes = append(changes, fmt.Sprintf("Срок: %s", *req.Deadline))
 	}
 
-	// Логируем если есть изменения
 	if len(changes) > 0 {
 		comment := "✏️ Изменён заказ: " + strings.Join(changes, " | ")
 		r.db.ExecContext(ctx, `
@@ -503,7 +507,6 @@ func (r *OrderRepo) PaymentCreate(ctx context.Context, orderID, receivedBy strin
 		return "", err
 	}
 
-	// Логируем в историю
 	comment := fmt.Sprintf("💰 Оплата: %.0f сом. | %s", req.Amount, payLabel)
 	if req.Notes != "" {
 		comment += " | " + req.Notes
@@ -788,7 +791,6 @@ func (r *OrderRepo) MaterialCreate(ctx context.Context, orderID, createdBy strin
 		return "", err
 	}
 
-	// Логируем в историю
 	total := req.Quantity * req.UnitPrice
 	comment := fmt.Sprintf("+ Материал: %s | %g %s", req.Name, req.Quantity, req.Unit)
 	if total > 0 {
@@ -806,7 +808,6 @@ func (r *OrderRepo) MaterialCreate(ctx context.Context, orderID, createdBy strin
 }
 
 func (r *OrderRepo) MaterialDelete(ctx context.Context, materialID, deletedBy string) error {
-	// Получаем данные до удаления
 	var name, unit, stageName, orderID string
 	var quantity float64
 	r.db.QueryRowContext(ctx, `
@@ -814,13 +815,11 @@ func (r *OrderRepo) MaterialDelete(ctx context.Context, materialID, deletedBy st
 		FROM order_materials WHERE id = $1
 	`, materialID).Scan(&orderID, &name, &quantity, &unit, &stageName)
 
-	// Удаляем
 	_, err := r.db.ExecContext(ctx, `DELETE FROM order_materials WHERE id = $1`, materialID)
 	if err != nil {
 		return err
 	}
 
-	// Логируем в историю
 	if orderID != "" && name != "" {
 		comment := fmt.Sprintf("- Удалён материал: %s | %g %s", name, quantity, unit)
 		if stageName != "" {
@@ -872,7 +871,6 @@ func (r *OrderRepo) MaterialsCatalog(ctx context.Context, search string) ([]Cata
 	return result, nil
 }
 
-// LogHistory — универсальный метод записи в историю заказа
 func (r *OrderRepo) LogHistory(ctx context.Context, orderID, fromStage, toStage, changedBy, comment string) {
 	r.db.ExecContext(ctx, `
 		INSERT INTO order_history (order_id, from_stage, to_stage, changed_by, comment)

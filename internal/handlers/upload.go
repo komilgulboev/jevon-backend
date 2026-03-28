@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"jevon/internal/middleware"
+	"jevon/internal/models"
 	"jevon/internal/repository"
 	"jevon/internal/storage"
 
@@ -29,6 +30,7 @@ func (h *UploadHandler) SetOrderRepo(repo *repository.OrderRepo) {
 
 // POST /api/projects/:project_id/stages/:stage_id/upload
 // POST /api/orders/:order_id/stages/:stage_id/upload
+// Query params: type=project, category=preliminary|design|drawing|finished|installation|handover|other
 func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 	if h.storage == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "file storage not available"})
@@ -38,6 +40,7 @@ func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 	claims     := middleware.GetClaims(c)
 	stageID    := c.Param("stage_id")
 	uploadType := c.DefaultQuery("type", "project")
+	category   := c.DefaultQuery("category", "other")
 
 	projectID := c.Param("project_id")
 	orderID   := c.Param("order_id")
@@ -66,7 +69,8 @@ func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 		return
 	}
 
-	log.Printf("📁 Uploading %d file(s), type=%s, id=%s", len(fileHeaders), uploadType, projectID)
+	log.Printf("📁 Uploading %d file(s), type=%s, category=%s, id=%s",
+		len(fileHeaders), uploadType, category, projectID)
 
 	var uploadedFiles []storage.UploadedFile
 	for _, header := range fileHeaders {
@@ -76,8 +80,6 @@ func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 			continue
 		}
 		defer file.Close()
-
-		log.Printf("⬆️  Uploading: %s (%.1f KB)", header.Filename, float64(header.Size)/1024)
 
 		fileURL, fileName, err := h.storage.Upload(c, file, header, uploadType, projectID)
 		if err != nil {
@@ -102,8 +104,16 @@ func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 
 	var savedIDs []string
 	for _, f := range uploadedFiles {
-		id, err := h.pipeline.CreateFile(c, projectID, stageID, claims.UserID,
-			storage.ToCreateFileRequest(f))
+		req := storage.ToCreateFileRequest(f)
+		// Добавляем категорию
+		modelReq := models.CreateFileRequest{
+			FileName: req.FileName,
+			FileURL:  req.FileURL,
+			FileType: req.FileType,
+			FileSize: req.FileSize,
+			Category: category,
+		}
+		id, err := h.pipeline.CreateFile(c, projectID, stageID, claims.UserID, modelReq)
 		if err != nil {
 			log.Printf("❌ DB save error: %v", err)
 		} else {
@@ -117,8 +127,9 @@ func (h *UploadHandler) UploadStageFiles(c *gin.Context) {
 		for _, f := range uploadedFiles {
 			names = append(names, f.FileName)
 		}
-		comment := fmt.Sprintf("📎 Загружено файлов: %d | %s",
-			len(savedIDs), strings.Join(names, ", "))
+		categoryLabel := fileCategoryLabel(category)
+		comment := fmt.Sprintf("📎 Загружено файлов: %d [%s] | %s",
+			len(savedIDs), categoryLabel, strings.Join(names, ", "))
 		h.orderRepo.LogHistory(c, orderID, "files", "files", claims.UserID, comment)
 	}
 
@@ -175,4 +186,21 @@ func (h *UploadHandler) DeleteFile(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// helper
+func fileCategoryLabel(category string) string {
+	labels := map[string]string{
+		"preliminary":  "Предварительные фото",
+		"design":       "Дизайн",
+		"drawing":      "Чертёж",
+		"finished":     "Готовые работы",
+		"installation": "Установка",
+		"handover":     "Сдача",
+		"other":        "Другое",
+	}
+	if l, ok := labels[category]; ok {
+		return l
+	}
+	return category
 }

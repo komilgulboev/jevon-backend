@@ -350,10 +350,12 @@ func (r *PipelineRepo) FilesByStage(ctx context.Context, stageID string) ([]mode
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, project_id, stage_id, file_name, file_url,
 		       COALESCE(file_type,''), COALESCE(file_size,0),
-		       COALESCE(CAST(uploaded_by AS TEXT),''), created_at
+		       COALESCE(CAST(uploaded_by AS TEXT),''),
+		       COALESCE(category,'other'),
+		       created_at
 		FROM stage_files
 		WHERE stage_id = $1
-		ORDER BY created_at DESC
+		ORDER BY category, created_at DESC
 	`, stageID)
 	if err != nil {
 		return nil, err
@@ -364,19 +366,23 @@ func (r *PipelineRepo) FilesByStage(ctx context.Context, stageID string) ([]mode
 	for rows.Next() {
 		var f models.StageFile
 		rows.Scan(&f.ID, &f.ProjectID, &f.StageID, &f.FileName, &f.FileURL,
-			&f.FileType, &f.FileSize, &f.UploadedBy, &f.CreatedAt)
+			&f.FileType, &f.FileSize, &f.UploadedBy, &f.Category, &f.CreatedAt)
 		result = append(result, f)
 	}
 	return result, nil
 }
 
 func (r *PipelineRepo) CreateFile(ctx context.Context, projectID, stageID, uploadedBy string, req models.CreateFileRequest) (string, error) {
+	category := req.Category
+	if category == "" {
+		category = "other"
+	}
 	var id string
 	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO stage_files (project_id, stage_id, file_name, file_url, file_type, file_size, uploaded_by)
-		VALUES (NULLIF($1,'')::uuid, $2, $3, $4, $5, $6, NULLIF($7,'')::uuid)
+		INSERT INTO stage_files (project_id, stage_id, file_name, file_url, file_type, file_size, uploaded_by, category)
+		VALUES (NULLIF($1,'')::uuid, $2, $3, $4, $5, $6, NULLIF($7,'')::uuid, $8)
 		RETURNING id
-	`, projectID, stageID, req.FileName, req.FileURL, req.FileType, req.FileSize, uploadedBy,
+	`, projectID, stageID, req.FileName, req.FileURL, req.FileType, req.FileSize, uploadedBy, category,
 	).Scan(&id)
 	return id, err
 }
@@ -420,8 +426,8 @@ func (r *PipelineRepo) History(ctx context.Context, projectID string) ([]models.
 // ── Project total cost ────────────────────────────────────
 
 type ProjectCost struct {
-	ProjectID  string  `json:"project_id"`
-	TotalCost  float64 `json:"total_cost"`
+	ProjectID string  `json:"project_id"`
+	TotalCost float64 `json:"total_cost"`
 }
 
 func (r *PipelineRepo) TotalCost(ctx context.Context, projectID string) (float64, error) {

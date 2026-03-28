@@ -66,6 +66,7 @@ type Order struct {
 	Title         string    `json:"title"`
 	Description   string    `json:"description"`
 	Address       string    `json:"address"`
+	LocationURL   string    `json:"location_url"`
 	CurrentStage  string    `json:"current_stage"`
 	Status        string    `json:"status"`
 	Priority      string    `json:"priority"`
@@ -87,23 +88,25 @@ type Order struct {
 }
 
 type CreateOrderRequest struct {
-	OrderType     string   `json:"order_type"  binding:"required"`
-	ClientID      string   `json:"client_id"`
-	ClientName    string   `json:"client_name"`
-	ClientPhone   string   `json:"client_phone"`
-	Title         string   `json:"title"       binding:"required"`
-	Description   string   `json:"description"`
-	Address       string   `json:"address"`
-	Priority      string   `json:"priority"`
-	Deadline      *string  `json:"deadline"`
-	EstimatedCost float64  `json:"estimated_cost"`
-	ManagerID     string   `json:"manager_id"`
+	OrderType     string  `json:"order_type"  binding:"required"`
+	ClientID      string  `json:"client_id"`
+	ClientName    string  `json:"client_name"`
+	ClientPhone   string  `json:"client_phone"`
+	Title         string  `json:"title"       binding:"required"`
+	Description   string  `json:"description"`
+	Address       string  `json:"address"`
+	LocationURL   string  `json:"location_url"`
+	Priority      string  `json:"priority"`
+	Deadline      *string `json:"deadline"`
+	EstimatedCost float64 `json:"estimated_cost"`
+	ManagerID     string  `json:"manager_id"`
 }
 
 type UpdateOrderRequest struct {
 	Title         *string  `json:"title"`
 	Description   *string  `json:"description"`
 	Address       *string  `json:"address"`
+	LocationURL   *string  `json:"location_url"`
 	Status        *string  `json:"status"`
 	Priority      *string  `json:"priority"`
 	Deadline      *string  `json:"deadline"`
@@ -119,17 +122,17 @@ type UpdateOrderRequest struct {
 // ── Этапы заказа ─────────────────────────────────────────
 
 type OrderStage struct {
-	ID          string     `json:"id"`
-	OrderID     string     `json:"order_id"`
-	Stage       string     `json:"stage"`
-	StageOrder  int        `json:"stage_order"`
-	Status      string     `json:"status"`
-	AssignedTo  string     `json:"assigned_to"`
-	AssigneeName string    `json:"assignee_name"`
-	StartedAt   *time.Time `json:"started_at"`
-	FinishedAt  *time.Time `json:"finished_at"`
-	Notes       string     `json:"notes"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID           string     `json:"id"`
+	OrderID      string     `json:"order_id"`
+	Stage        string     `json:"stage"`
+	StageOrder   int        `json:"stage_order"`
+	Status       string     `json:"status"`
+	AssignedTo   string     `json:"assigned_to"`
+	AssigneeName string     `json:"assignee_name"`
+	StartedAt    *time.Time `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	Notes        string     `json:"notes"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type UpdateOrderStageRequest struct {
@@ -146,15 +149,15 @@ type CompleteOrderStageRequest struct {
 // ── Оплаты ───────────────────────────────────────────────
 
 type OrderPayment struct {
-	ID          string    `json:"id"`
-	OrderID     string    `json:"order_id"`
-	Amount      float64   `json:"amount"`
-	PaymentType string    `json:"payment_type"`
-	PaidAt      time.Time `json:"paid_at"`
-	Notes       string    `json:"notes"`
-	ReceivedBy  string    `json:"received_by"`
-	ReceiverName string   `json:"receiver_name"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	OrderID      string    `json:"order_id"`
+	Amount       float64   `json:"amount"`
+	PaymentType  string    `json:"payment_type"`
+	PaidAt       time.Time `json:"paid_at"`
+	Notes        string    `json:"notes"`
+	ReceivedBy   string    `json:"received_by"`
+	ReceiverName string    `json:"receiver_name"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type CreatePaymentRequest struct {
@@ -166,36 +169,36 @@ type CreatePaymentRequest struct {
 // ── Расчёты ───────────────────────────────────────────────
 
 type OrderCalculation struct {
-	ID               string  `json:"id"`
-	OrderID          string  `json:"order_id"`
-	StageID          string  `json:"stage_id"`
-	TotalAreaM2      float64 `json:"total_area_m2"`
-	PaintKg          float64 `json:"paint_kg"`
-	PrimerKg         float64 `json:"primer_kg"`
-	PaintType        string  `json:"paint_type"`
-	CNCType          string  `json:"cnc_type"`
-	CNCTimeHours     float64 `json:"cnc_time_hours"`
-	SheetCount       int     `json:"sheet_count"`
-	CutLengthM       float64 `json:"cut_length_m"`
-	ClientMaterial   bool    `json:"client_material"`
-	ClientMatDesc    string  `json:"client_material_desc"`
-	CalculatedCost   float64 `json:"calculated_cost"`
-	CalculatedBy     string  `json:"calculated_by"`
-	CalculatedAt     string  `json:"calculated_at"`
-	Notes            string  `json:"notes"`
+	ID             string  `json:"id"`
+	OrderID        string  `json:"order_id"`
+	StageID        string  `json:"stage_id"`
+	TotalAreaM2    float64 `json:"total_area_m2"`
+	PaintKg        float64 `json:"paint_kg"`
+	PrimerKg       float64 `json:"primer_kg"`
+	PaintType      string  `json:"paint_type"`
+	CNCType        string  `json:"cnc_type"`
+	CNCTimeHours   float64 `json:"cnc_time_hours"`
+	SheetCount     int     `json:"sheet_count"`
+	CutLengthM     float64 `json:"cut_length_m"`
+	ClientMaterial bool    `json:"client_material"`
+	ClientMatDesc  string  `json:"client_material_desc"`
+	CalculatedCost float64 `json:"calculated_cost"`
+	CalculatedBy   string  `json:"calculated_by"`
+	CalculatedAt   string  `json:"calculated_at"`
+	Notes          string  `json:"notes"`
 }
 
 type CreateCalculationRequest struct {
-	StageID          string  `json:"stage_id"`
-	TotalAreaM2      float64 `json:"total_area_m2"`
-	PaintType        string  `json:"paint_type"`
-	CNCType          string  `json:"cnc_type"`
-	CNCTimeHours     float64 `json:"cnc_time_hours"`
-	SheetCount       int     `json:"sheet_count"`
-	CutLengthM       float64 `json:"cut_length_m"`
-	ClientMaterial   bool    `json:"client_material"`
-	ClientMatDesc    string  `json:"client_material_desc"`
-	Notes            string  `json:"notes"`
+	StageID        string  `json:"stage_id"`
+	TotalAreaM2    float64 `json:"total_area_m2"`
+	PaintType      string  `json:"paint_type"`
+	CNCType        string  `json:"cnc_type"`
+	CNCTimeHours   float64 `json:"cnc_time_hours"`
+	SheetCount     int     `json:"sheet_count"`
+	CutLengthM     float64 `json:"cut_length_m"`
+	ClientMaterial bool    `json:"client_material"`
+	ClientMatDesc  string  `json:"client_material_desc"`
+	Notes          string  `json:"notes"`
 }
 
 // ── Позиции заказа ────────────────────────────────────────
@@ -303,7 +306,6 @@ var StageLabelsByType = map[string]map[string]string{
 	},
 }
 
-// StageRoles — роли которые могут работать с этапом
 var StageRoles = map[string][]string{
 	"intake":      {"manager", "admin", "supervisor"},
 	"measure":     {"manager", "admin", "supervisor"},
