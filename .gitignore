@@ -1,0 +1,6 @@
+tmp/
+.env
+*.exe
+*.test
+vendor/
+docs/
