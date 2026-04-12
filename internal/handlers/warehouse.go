@@ -242,7 +242,14 @@ func (h *WarehouseHandler) SupplierPaymentDelete(c *gin.Context) {
 }
 
 // ─── Приходные накладные ──────────────────────────────────────
-
+func (h *WarehouseHandler) ReceiptNextNumber(c *gin.Context) {
+	num, err := h.repo.ReceiptNextNumber(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"number": num})
+}
 func (h *WarehouseHandler) ReceiptList(c *gin.Context) {
 	receipts, err := h.repo.ReceiptList(c, c.Query("supplier_id"), c.Query("search"))
 	if err != nil {

@@ -116,6 +116,7 @@ type WarehouseItem struct {
 	TotalOut float64 `db:"total_out" json:"total_out"`
 	Balance  float64 `db:"balance"   json:"balance"`
 	AvgPrice float64 `db:"avg_price" json:"avg_price"`
+	SalePrice float64 `db:"sale_price" json:"sale_price"`
 }
 
 type CreateWarehouseItemRequest struct {
@@ -150,6 +151,7 @@ type ReceiptItem struct {
 	Price     float64 `db:"price"      json:"price"`
 	Total     float64 `db:"total"      json:"total"`
 	Notes     string  `db:"notes"      json:"notes"`
+	SalePrice float64 `db:"sale_price" json:"sale_price"`
 }
 
 type Receipt struct {
@@ -169,10 +171,11 @@ type Receipt struct {
 }
 
 type CreateReceiptItemInput struct {
-	ItemID   string  `json:"item_id"  binding:"required"`
-	Quantity float64 `json:"quantity" binding:"required,gt=0"`
-	Price    float64 `json:"price"    binding:"gte=0"`
-	Notes    string  `json:"notes"`
+    ItemID    string  `json:"item_id"    binding:"required"`
+    Quantity  float64 `json:"quantity"   binding:"required,gt=0"`
+    Price     float64 `json:"price"      binding:"gte=0"`
+    SalePrice float64 `json:"sale_price"` // ← добавить
+    Notes     string  `json:"notes"`
 }
 
 type CreateReceiptRequest struct {
@@ -191,10 +194,11 @@ type UpdateReceiptRequest struct {
 }
 
 type AddReceiptItemRequest struct {
-	ItemID   string  `json:"item_id"  binding:"required"`
-	Quantity float64 `json:"quantity" binding:"required,gt=0"`
-	Price    float64 `json:"price"    binding:"gte=0"`
-	Notes    string  `json:"notes"`
+    ItemID    string  `json:"item_id"    binding:"required"`
+    Quantity  float64 `json:"quantity"   binding:"required,gt=0"`
+    Price     float64 `json:"price"      binding:"gte=0"`
+    SalePrice float64 `json:"sale_price"` // ← добавить
+    Notes     string  `json:"notes"`
 }
 
 // ─── Платежи по накладным ─────────────────────────────────────

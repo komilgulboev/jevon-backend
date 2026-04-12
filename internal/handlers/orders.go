@@ -167,7 +167,8 @@ func (h *OrderHandler) OrderStats(c *gin.Context) {
 
 // GET /api/orders/:order_id/stages
 func (h *OrderHandler) StagesList(c *gin.Context) {
-	stages, err := h.repo.StagesByOrder(c, c.Param("order_id"))
+	claims := middleware.GetClaims(c)
+	stages, err := h.repo.StagesByOrder(c, c.Param("order_id"), claims.UserID, claims.RoleName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -367,7 +368,6 @@ func (h *OrderHandler) ExpensesList(c *gin.Context) {
 		expenses = []repository.Expense{}
 	}
 
-	// Считаем итог расходов
 	total := 0.0
 	for _, e := range expenses {
 		total += e.Amount

@@ -2,25 +2,7 @@ package models
 
 import "time"
 
-type Role struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-type User struct {
-	ID           string    `json:"id"`
-	RoleID       int       `json:"role_id"`
-	RoleName     string    `json:"role_name"`
-	FullName     string    `json:"full_name"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"-"`
-	Phone        string    `json:"phone"`
-	IsActive     bool      `json:"is_active"`
-	AvatarURL    string    `json:"avatar_url"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
+// ─── Проект ───────────────────────────────────────────────
 
 type Project struct {
 	ID            string    `json:"id"`
@@ -40,6 +22,8 @@ type Project struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// ─── Задача ───────────────────────────────────────────────
+
 type Task struct {
 	ID             string    `json:"id"`
 	ProjectID      string    `json:"project_id"`
@@ -55,30 +39,7 @@ type Task struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-// ── Request DTOs ──────────────────────────────────────────
-
-type LoginRequest struct {
-	Email    string `json:"email"    binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
-}
-
-type LoginResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	User         User   `json:"user"`
-}
-
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token" binding:"required"`
-}
-
-type CreateUserRequest struct {
-	RoleID   int    `json:"role_id"   binding:"required"`
-	FullName string `json:"full_name" binding:"required"`
-	Email    string `json:"email"     binding:"required,email"`
-	Password string `json:"password"  binding:"required,min=6"`
-	Phone    string `json:"phone"`
-}
+// ─── Request DTOs ─────────────────────────────────────────
 
 type CreateProjectRequest struct {
 	Title       string   `json:"title"       binding:"required"`
@@ -122,6 +83,8 @@ type UpdateTaskRequest struct {
 type UpdateTaskStatusRequest struct {
 	Status string `json:"status" binding:"required"`
 }
+
+// ─── Dashboard ────────────────────────────────────────────
 
 type DashboardStats struct {
 	ActiveProjects  int `json:"active_projects"`

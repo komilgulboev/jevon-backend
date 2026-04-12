@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS salary_advances;
+ALTER TABLE timesheets DROP COLUMN IF EXISTS check_in;
+ALTER TABLE timesheets DROP COLUMN IF EXISTS check_out;
+ALTER TABLE timesheets DROP COLUMN IF EXISTS is_paid;
+ALTER TABLE timesheets DROP COLUMN IF EXISTS paid_at;
+ALTER TABLE timesheets DROP COLUMN IF EXISTS paid_by;
+ALTER TABLE order_stage_assignees DROP COLUMN IF EXISTS bonus_percent;
+ALTER TABLE order_stage_assignees DROP COLUMN IF EXISTS bonus_amount;
+ALTER TABLE workshop_expenses DROP COLUMN IF EXISTS order_id;
+ALTER TABLE workshop_expenses DROP COLUMN IF EXISTS user_id;

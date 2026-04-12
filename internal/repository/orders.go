@@ -179,7 +179,11 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 			AND o.id IN (
 				SELECT DISTINCT order_id FROM order_stages
 				WHERE assigned_to = $%d
-			)`, n)
+				UNION
+				SELECT DISTINCT os.order_id FROM order_stages os
+				JOIN order_stage_assignees osa ON osa.stage_id = os.id
+				WHERE osa.user_id = $%d
+			)`, n, n)
 		args = append(args, userID)
 		n++
 	}
@@ -401,8 +405,10 @@ func (r *OrderRepo) OrderCancel(ctx context.Context, id string) error {
 
 // ── Этапы ────────────────────────────────────────────────
 
-func (r *OrderRepo) StagesByOrder(ctx context.Context, orderID string) ([]models.OrderStage, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func (r *OrderRepo) StagesByOrder(ctx context.Context, orderID, userID, roleName string) ([]models.OrderStage, error) {
+	isRestricted := roleName != "admin" && roleName != "supervisor" && roleName != "manager"
+
+	base := `
 		SELECT
 			os.id, os.order_id, os.stage, os.stage_order, os.status,
 			COALESCE(CAST(os.assigned_to AS TEXT),''),
@@ -411,10 +417,29 @@ func (r *OrderRepo) StagesByOrder(ctx context.Context, orderID string) ([]models
 			COALESCE(os.notes,''), os.updated_at
 		FROM order_stages os
 		LEFT JOIN users u ON u.id = os.assigned_to
-		WHERE os.order_id = $1
-		ORDER BY os.stage_order
-	`, orderID)
-	if err != nil { return nil, err }
+		WHERE os.order_id = $1`
+
+	var rows *sql.Rows
+	var err error
+
+	if isRestricted {
+		// Показываем только этапы где пользователь назначен
+		// (через assigned_to или через order_stage_assignees)
+		query := base + ` AND (
+			os.assigned_to = $2::uuid
+			OR os.id IN (
+				SELECT stage_id FROM order_stage_assignees WHERE user_id = $2::uuid
+			)
+		) ORDER BY os.stage_order`
+		rows, err = r.db.QueryContext(ctx, query, orderID, userID)
+	} else {
+		query := base + " ORDER BY os.stage_order"
+		rows, err = r.db.QueryContext(ctx, query, orderID)
+	}
+
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 
 	var result []models.OrderStage

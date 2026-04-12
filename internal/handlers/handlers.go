@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// ── Auth ──────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────
 
 type AuthHandler struct {
 	users   *repository.UserRepo
@@ -24,28 +24,32 @@ func NewAuthHandler(users *repository.UserRepo, authSvc *auth.Service) *AuthHand
 	return &AuthHandler{users: users, authSvc: authSvc}
 }
 
-// @Summary Login
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param body body models.LoginRequest true "Credentials"
-// @Success 200 {object} models.LoginResponse
-// @Router /auth/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	user, err := h.users.FindByEmail(c, req.Email)
+
+	login := req.Phone
+	if login == "" {
+		login = req.Email
+	}
+	if login == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Введите номер телефона"})
+		return
+	}
+
+	user, err := h.users.FindByLogin(c, login)
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный логин или пароль"})
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный логин или пароль"})
 		return
 	}
+
 	accessToken, err := h.authSvc.GenerateAccessToken(user.ID, user.Email, user.RoleName, user.RoleID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token error"})
@@ -64,13 +68,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
-// @Summary Refresh token
-// @Tags auth
-// @Accept json
-// @Produce json
-// @Param body body models.RefreshRequest true "Refresh token"
-// @Success 200 {object} map[string]string
-// @Router /auth/refresh [post]
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req models.RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -96,10 +93,6 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"access_token": accessToken})
 }
 
-// @Summary Logout
-// @Tags auth
-// @Security BearerAuth
-// @Router /auth/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
 	var req models.RefreshRequest
 	c.ShouldBindJSON(&req)
@@ -108,7 +101,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
-// ── Users ─────────────────────────────────────────────────
+// ── Users / Employees ─────────────────────────────────────────
 
 type UsersHandler struct {
 	repo *repository.UserRepo
@@ -118,25 +111,27 @@ func NewUsersHandler(repo *repository.UserRepo) *UsersHandler {
 	return &UsersHandler{repo: repo}
 }
 
-// @Summary List users
-// @Tags users
-// @Security BearerAuth
-// @Success 200 {object} map[string]interface{}
-// @Router /users [get]
 func (h *UsersHandler) List(c *gin.Context) {
 	users, err := h.repo.List(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if users == nil {
+		users = []models.User{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": users})
 }
 
-// @Summary Create user
-// @Tags users
-// @Security BearerAuth
-// @Param body body models.CreateUserRequest true "User data"
-// @Router /users [post]
+func (h *UsersHandler) Get(c *gin.Context) {
+	user, err := h.repo.FindByID(c, c.Param("id"))
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "не найдено"})
+		return
+	}
+	c.JSON(http.StatusOK, user)
+}
+
 func (h *UsersHandler) Create(c *gin.Context) {
 	var req models.CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -145,31 +140,29 @@ func (h *UsersHandler) Create(c *gin.Context) {
 	}
 	id, err := h.repo.Create(c, req)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "email already exists or invalid role"})
+		c.JSON(http.StatusConflict, gin.H{"error": "телефон уже занят или неверная роль"})
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
-// @Summary Get user
-// @Tags users
-// @Security BearerAuth
-// @Param id path string true "User ID"
-// @Router /users/{id} [get]
-func (h *UsersHandler) Get(c *gin.Context) {
-	user, err := h.repo.FindByID(c, c.Param("id"))
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+func (h *UsersHandler) Update(c *gin.Context) {
+	var req models.UpdateUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, user)
+	if err := h.repo.Update(c, c.Param("id"), req); err != nil {
+		if err.Error() == "not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "не найдено"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "обновлено"})
 }
 
-// @Summary Toggle user active status
-// @Tags users
-// @Security BearerAuth
-// @Param id path string true "User ID"
-// @Router /users/{id}/toggle-active [patch]
 func (h *UsersHandler) ToggleActive(c *gin.Context) {
 	isActive, err := h.repo.ToggleActive(c, c.Param("id"))
 	if err != nil {
@@ -179,7 +172,50 @@ func (h *UsersHandler) ToggleActive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"is_active": isActive})
 }
 
-// ── Dashboard ─────────────────────────────────────────────
+func (h *UsersHandler) RoleList(c *gin.Context) {
+	roles, err := h.repo.RoleList(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if roles == nil {
+		roles = []models.Role{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": roles})
+}
+
+// GET /api/users/assignable — доступен всем авторизованным, только имя+роль
+func (h *UsersHandler) Assignable(c *gin.Context) {
+	users, err := h.repo.List(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	type AssignableUser struct {
+		ID        string `json:"id"`
+		FullName  string `json:"full_name"`
+		LastName  string `json:"last_name"`
+		RoleName  string `json:"role_name"`
+		AvatarURL string `json:"avatar_url"`
+		IsActive  bool   `json:"is_active"`
+	}
+	result := []AssignableUser{}
+	for _, u := range users {
+		if u.IsActive {
+			result = append(result, AssignableUser{
+				ID:        u.ID,
+				FullName:  u.FullName,
+				LastName:  u.LastName,
+				RoleName:  u.RoleName,
+				AvatarURL: u.AvatarURL,
+				IsActive:  u.IsActive,
+			})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// ── Dashboard ─────────────────────────────────────────────────
 
 type DashboardHandler struct {
 	repo *repository.DashboardRepo
@@ -189,11 +225,6 @@ func NewDashboardHandler(repo *repository.DashboardRepo) *DashboardHandler {
 	return &DashboardHandler{repo: repo}
 }
 
-// @Summary Dashboard statistics
-// @Tags dashboard
-// @Security BearerAuth
-// @Success 200 {object} models.DashboardStats
-// @Router /dashboard/stats [get]
 func (h *DashboardHandler) Stats(c *gin.Context) {
 	stats, err := h.repo.Stats(c)
 	if err != nil {
@@ -203,7 +234,7 @@ func (h *DashboardHandler) Stats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// ── Projects ──────────────────────────────────────────────
+// ── Projects ──────────────────────────────────────────────────
 
 type ProjectsHandler struct {
 	repo *repository.ProjectRepo
@@ -213,11 +244,6 @@ func NewProjectsHandler(repo *repository.ProjectRepo) *ProjectsHandler {
 	return &ProjectsHandler{repo: repo}
 }
 
-// @Summary List projects
-// @Tags projects
-// @Security BearerAuth
-// @Param status query string false "Filter by status"
-// @Router /projects [get]
 func (h *ProjectsHandler) List(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	projects, err := h.repo.List(c, claims.UserID, claims.RoleName, c.Query("status"))
@@ -231,11 +257,6 @@ func (h *ProjectsHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": projects})
 }
 
-// @Summary Create project
-// @Tags projects
-// @Security BearerAuth
-// @Param body body models.CreateProjectRequest true "Project data"
-// @Router /projects [post]
 func (h *ProjectsHandler) Create(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	var req models.CreateProjectRequest
@@ -251,11 +272,6 @@ func (h *ProjectsHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
-// @Summary Update project
-// @Tags projects
-// @Security BearerAuth
-// @Param project_id path string true "Project ID"
-// @Router /projects/{project_id} [patch]
 func (h *ProjectsHandler) Update(c *gin.Context) {
 	var req models.UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -269,17 +285,12 @@ func (h *ProjectsHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
 }
 
-// @Summary Delete project
-// @Tags projects
-// @Security BearerAuth
-// @Param project_id path string true "Project ID"
-// @Router /projects/{project_id} [delete]
 func (h *ProjectsHandler) Delete(c *gin.Context) {
 	h.repo.SoftDelete(c, c.Param("project_id"))
 	c.JSON(http.StatusOK, gin.H{"message": "cancelled"})
 }
 
-// ── Tasks ─────────────────────────────────────────────────
+// ── Tasks ─────────────────────────────────────────────────────
 
 type TasksHandler struct {
 	repo *repository.TaskRepo
@@ -289,12 +300,6 @@ func NewTasksHandler(repo *repository.TaskRepo) *TasksHandler {
 	return &TasksHandler{repo: repo}
 }
 
-// @Summary List tasks
-// @Tags tasks
-// @Security BearerAuth
-// @Param project_id query string false "Filter by project"
-// @Param status     query string false "Filter by status"
-// @Router /tasks [get]
 func (h *TasksHandler) List(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	tasks, err := h.repo.List(c,
@@ -311,10 +316,6 @@ func (h *TasksHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": tasks})
 }
 
-// @Summary Create task
-// @Tags tasks
-// @Security BearerAuth
-// @Router /tasks [post]
 func (h *TasksHandler) Create(c *gin.Context) {
 	var req models.CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -329,11 +330,6 @@ func (h *TasksHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
-// @Summary Update task
-// @Tags tasks
-// @Security BearerAuth
-// @Param id path string true "Task ID"
-// @Router /tasks/{id} [patch]
 func (h *TasksHandler) Update(c *gin.Context) {
 	var req models.UpdateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -347,11 +343,6 @@ func (h *TasksHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "updated"})
 }
 
-// @Summary Update task status
-// @Tags tasks
-// @Security BearerAuth
-// @Param id path string true "Task ID"
-// @Router /tasks/{id}/status [patch]
 func (h *TasksHandler) UpdateStatus(c *gin.Context) {
 	var req models.UpdateTaskStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -362,15 +353,9 @@ func (h *TasksHandler) UpdateStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": req.Status})
 }
 
-// @Summary Delete task
-// @Tags tasks
-// @Security BearerAuth
-// @Param id path string true "Task ID"
-// @Router /tasks/{id} [delete]
 func (h *TasksHandler) Delete(c *gin.Context) {
 	h.repo.Delete(c, c.Param("id"))
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
-// Ensure sql import used
 var _ = sql.ErrNoRows

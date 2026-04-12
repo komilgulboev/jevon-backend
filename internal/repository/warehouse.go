@@ -71,7 +71,8 @@ func (r *WarehouseRepo) ItemList(ctx context.Context, category, search, active s
 			wi.min_stock,
 			COALESCE(wi.notes,   '') AS notes,
 			wi.is_active,
-			b.total_in, b.total_out, b.balance, b.avg_price
+			b.total_in, b.total_out, b.balance, b.avg_price,
+			COALESCE(wi.sale_price, 0) AS sale_price
 		FROM warehouse_balance b
 		JOIN warehouse_items wi ON wi.id = b.id
 		WHERE 1=1`
@@ -106,7 +107,7 @@ func (r *WarehouseRepo) ItemList(ctx context.Context, category, search, active s
 		if err := rows.Scan(
 			&it.ID, &it.Name, &it.Article, &it.Category,
 			&it.UnitID, &it.UnitName, &it.MinStock, &it.Notes, &it.IsActive,
-			&it.TotalIn, &it.TotalOut, &it.Balance, &it.AvgPrice,
+			&it.TotalIn, &it.TotalOut, &it.Balance, &it.AvgPrice, &it.SalePrice,
 		); err != nil {
 			return nil, err
 		}
@@ -126,13 +127,14 @@ func (r *WarehouseRepo) ItemByID(ctx context.Context, id string) (*models.Wareho
 			wi.min_stock,
 			COALESCE(wi.notes,   '') AS notes,
 			wi.is_active,
-			b.total_in, b.total_out, b.balance, b.avg_price
+			b.total_in, b.total_out, b.balance, b.avg_price,
+			COALESCE(wi.sale_price, 0) AS sale_price
 		FROM warehouse_balance b
 		JOIN warehouse_items wi ON wi.id = b.id
 		WHERE b.id = $1`, id).Scan(
 		&it.ID, &it.Name, &it.Article, &it.Category,
 		&it.UnitID, &it.UnitName, &it.MinStock, &it.Notes, &it.IsActive,
-		&it.TotalIn, &it.TotalOut, &it.Balance, &it.AvgPrice,
+		&it.TotalIn, &it.TotalOut, &it.Balance, &it.AvgPrice, &it.SalePrice,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -371,7 +373,6 @@ func (r *WarehouseRepo) SupplierDelete(ctx context.Context, id string) (string, 
 
 // ─── Общие платежи поставщику ─────────────────────────────────
 
-// SupplierPaymentHistory — все платежи поставщика (общие + по накладным)
 func (r *WarehouseRepo) SupplierPaymentHistory(ctx context.Context, supplierID string) ([]models.SupplierPayment, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT
@@ -421,7 +422,6 @@ func (r *WarehouseRepo) SupplierPaymentHistory(ctx context.Context, supplierID s
 	return payments, nil
 }
 
-// SupplierPaymentCreate — создаёт общий платёж и распределяет по накладным
 func (r *WarehouseRepo) SupplierPaymentCreate(
 	ctx context.Context,
 	supplierID, userID string,
@@ -443,14 +443,12 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 		method = "cash"
 	}
 
-	// Считаем долг до платежа
 	var debtBefore float64
 	tx.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(total_amount - paid_amount), 0)
 		FROM warehouse_receipts
 		WHERE supplier_id = $1 AND payment_status != 'paid'`, supplierID).Scan(&debtBefore)
 
-	// Получаем неоплаченные накладные ORDER BY receipt_date ASC (старые первые)
 	type unpaidReceipt struct {
 		id     string
 		number string
@@ -476,7 +474,6 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 	}
 	recRows.Close()
 
-	// Распределяем платёж по накладным
 	remaining := req.Amount
 	distribution := []models.PaymentDistribution{}
 
@@ -484,7 +481,6 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 		if remaining <= 0 {
 			break
 		}
-
 		var apply float64
 		var status string
 		if remaining >= rec.debt {
@@ -494,8 +490,6 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 			apply = remaining
 			status = "partial"
 		}
-
-		// Создаём платёж привязанный к накладной
 		pid := uuid.New().String()
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO warehouse_payments
@@ -507,8 +501,6 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 		if err != nil {
 			return nil, err
 		}
-
-		// Триггер обновит paid_amount и payment_status накладной автоматически
 		distribution = append(distribution, models.PaymentDistribution{
 			ReceiptID:     rec.id,
 			ReceiptNumber: rec.number,
@@ -516,11 +508,9 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 			Remaining:     rec.debt - apply,
 			Status:        status,
 		})
-
 		remaining -= apply
 	}
 
-	// Если остался остаток — сохраняем как общий платёж без накладной
 	if remaining > 0 {
 		pid := uuid.New().String()
 		_, err = tx.ExecContext(ctx, `
@@ -546,7 +536,6 @@ func (r *WarehouseRepo) SupplierPaymentCreate(
 		return nil, err
 	}
 
-	// Считаем долг после
 	var debtAfter float64
 	r.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(total_amount - paid_amount), 0)
@@ -574,7 +563,17 @@ func (r *WarehouseRepo) SupplierPaymentDelete(ctx context.Context, paymentID str
 }
 
 // ─── Приходные накладные ──────────────────────────────────────
-
+func (r *WarehouseRepo) ReceiptNextNumber(ctx context.Context) (string, error) {
+	var maxNum string
+	r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(number), 'НК-000')
+		FROM warehouse_receipts
+		WHERE number ~ '^НК-\d+$'
+	`).Scan(&maxNum)
+	num := 0
+	fmt.Sscanf(maxNum, "НК-%d", &num)
+	return fmt.Sprintf("НК-%03d", num+1), nil
+}
 func (r *WarehouseRepo) ReceiptList(ctx context.Context, supplierID, search string) ([]models.Receipt, error) {
 	query := `
 		SELECT
@@ -677,7 +676,8 @@ func (r *WarehouseRepo) receiptItems(ctx context.Context, receiptID string) ([]m
 			COALESCE(wi.name, '') AS item_name,
 			COALESCE(u.name,  '') AS unit,
 			ri.quantity, ri.price, ri.total,
-			COALESCE(ri.notes, '') AS notes
+			COALESCE(ri.notes, '') AS notes,
+			COALESCE(wi.sale_price, 0) AS sale_price
 		FROM warehouse_receipt_items ri
 		JOIN warehouse_items wi ON wi.id = ri.item_id
 		LEFT JOIN units u ON u.id = wi.unit_id
@@ -692,7 +692,7 @@ func (r *WarehouseRepo) receiptItems(ctx context.Context, receiptID string) ([]m
 		var it models.ReceiptItem
 		if err := rows.Scan(
 			&it.ID, &it.ReceiptID, &it.ItemID, &it.ItemName,
-			&it.Unit, &it.Quantity, &it.Price, &it.Total, &it.Notes,
+			&it.Unit, &it.Quantity, &it.Price, &it.Total, &it.Notes, &it.SalePrice,
 		); err != nil {
 			return nil, err
 		}
@@ -715,6 +715,19 @@ func (r *WarehouseRepo) ReceiptCreate(ctx context.Context, req models.CreateRece
 	if receiptDate == "" {
 		receiptDate = "today"
 	}
+	// Автогенерация номера если не передан
+if strings.TrimSpace(req.Number) == "" {
+    var maxNum string
+    r.db.QueryRowContext(ctx, `
+        SELECT COALESCE(MAX(number), 'НК-000')
+        FROM warehouse_receipts
+        WHERE number ~ '^НК-\d+$'
+    `).Scan(&maxNum)
+    // Парсим число из НК-XXX
+    num := 0
+    fmt.Sscanf(maxNum, "НК-%d", &num)
+    req.Number = fmt.Sprintf("НК-%03d", num+1)
+}
 	receiptID := uuid.New().String()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO warehouse_receipts (id, number, supplier_id, receipt_date, notes, created_by)
@@ -725,6 +738,7 @@ func (r *WarehouseRepo) ReceiptCreate(ctx context.Context, req models.CreateRece
 	if err != nil {
 		return "", err
 	}
+
 	totalAmount := 0.0
 	for _, item := range req.Items {
 		itemID := uuid.New().String()
@@ -737,8 +751,18 @@ func (r *WarehouseRepo) ReceiptCreate(ctx context.Context, req models.CreateRece
 		if err != nil {
 			return "", err
 		}
+
+		// Обновляем цену продажи в номенклатуре если передана
+		if item.SalePrice > 0 {
+			_, _ = tx.ExecContext(ctx,
+				`UPDATE warehouse_items SET sale_price=$1 WHERE id=$2`,
+				item.SalePrice, item.ItemID,
+			)
+		}
+
 		totalAmount += item.Quantity * item.Price
 	}
+
 	_, err = tx.ExecContext(ctx,
 		`UPDATE warehouse_receipts SET total_amount=$1 WHERE id=$2`, totalAmount, receiptID)
 	if err != nil {
@@ -787,6 +811,7 @@ func (r *WarehouseRepo) ReceiptItemAdd(ctx context.Context, receiptID string, re
 		return "", err
 	}
 	defer tx.Rollback()
+
 	itemID := uuid.New().String()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO warehouse_receipt_items (id, receipt_id, item_id, quantity, price, notes)
@@ -797,6 +822,18 @@ func (r *WarehouseRepo) ReceiptItemAdd(ctx context.Context, receiptID string, re
 	if err != nil {
 		return "", err
 	}
+
+	// Обновляем цену продажи в номенклатуре если передана
+	if req.SalePrice > 0 {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE warehouse_items SET sale_price=$1 WHERE id=$2`,
+			req.SalePrice, req.ItemID,
+		)
+		if err != nil {
+			return "", err
+		}
+	}
+
 	if err := r.recalcReceiptTotal(ctx, tx, receiptID); err != nil {
 		return "", err
 	}
@@ -841,16 +878,12 @@ func (r *WarehouseRepo) recalcReceiptTotal(ctx context.Context, tx *sql.Tx, rece
 func (r *WarehouseRepo) ReceiptPaymentList(ctx context.Context, receiptID string) ([]models.ReceiptPayment, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT
-			id,
-			receipt_id,
-			supplier_id,
-			amount,
+			id, receipt_id, supplier_id, amount,
 			COALESCE(payment_method, 'cash') AS payment_method,
 			paid_at::text,
 			COALESCE(notes, '') AS notes,
 			COALESCE(is_supplier_payment, FALSE) AS is_supplier_payment,
-			created_by,
-			created_at::text
+			created_by, created_at::text
 		FROM warehouse_payments
 		WHERE receipt_id = $1
 		ORDER BY paid_at DESC, created_at DESC`, receiptID)
