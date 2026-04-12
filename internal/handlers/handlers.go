@@ -184,7 +184,6 @@ func (h *UsersHandler) RoleList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": roles})
 }
 
-// GET /api/users/assignable — доступен всем авторизованным, только имя+роль
 func (h *UsersHandler) Assignable(c *gin.Context) {
 	users, err := h.repo.List(c)
 	if err != nil {
@@ -257,6 +256,19 @@ func (h *ProjectsHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": projects})
 }
 
+func (h *ProjectsHandler) Get(c *gin.Context) {
+	p, err := h.repo.GetByID(c, c.Param("project_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if p == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "не найдено"})
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
 func (h *ProjectsHandler) Create(c *gin.Context) {
 	claims := middleware.GetClaims(c)
 	var req models.CreateProjectRequest
@@ -288,6 +300,41 @@ func (h *ProjectsHandler) Update(c *gin.Context) {
 func (h *ProjectsHandler) Delete(c *gin.Context) {
 	h.repo.SoftDelete(c, c.Param("project_id"))
 	c.JSON(http.StatusOK, gin.H{"message": "cancelled"})
+}
+
+func (h *ProjectsHandler) GetOrders(c *gin.Context) {
+	orders, err := h.repo.GetProjectOrders(c, c.Param("project_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if orders == nil {
+		orders = []models.ProjectOrder{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": orders})
+}
+
+func (h *ProjectsHandler) AddOrder(c *gin.Context) {
+	var req struct {
+		OrderID string `json:"order_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.repo.AddOrderToProject(c, c.Param("project_id"), req.OrderID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"message": "добавлено"})
+}
+
+func (h *ProjectsHandler) RemoveOrder(c *gin.Context) {
+	if err := h.repo.RemoveOrderFromProject(c, c.Param("project_id"), c.Param("order_id")); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "удалено"})
 }
 
 // ── Tasks ─────────────────────────────────────────────────────

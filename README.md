@@ -11,6 +11,98 @@
 ---
 
 ## Быстрый старт
+Создание билда
+
+Создаем билд на фронте через
+npm run build
+Далее создаем билд на стороне сервера 
+go build -tags prod -ldflags="-s -w" -o jevon_prod.exe ./cmd/api/
+Копируем exe на сервер и запускаем
+
+## Сбрось всех данных
+-- ============================================================
+-- Jevon CRM — Скрипт полного сброса данных
+-- Оставляет: пользователей, роли, каталоги, номенклатуру, поставщиков
+-- Удаляет: заказы, проекты, склад, расходы, задачи, табели
+-- ============================================================
+
+BEGIN;
+
+-- ── Расходные накладные ──────────────────────────────────
+DELETE FROM outgoing_invoice_items;
+DELETE FROM outgoing_invoices;
+
+-- ── Приходные накладные ──────────────────────────────────
+DELETE FROM warehouse_payments;
+DELETE FROM warehouse_receipt_items;
+DELETE FROM warehouse_receipts;
+
+-- ── Остатки склада ───────────────────────────────────────
+DELETE FROM warehouse_expenses;
+
+-- ── Заказы и всё связанное ───────────────────────────────
+DELETE FROM order_materials;
+DELETE FROM order_stage_assignees;
+DELETE FROM order_history;
+DELETE FROM order_comments;
+DELETE FROM order_payments;
+DELETE FROM order_expenses;
+DELETE FROM order_files;
+DELETE FROM order_items;
+DELETE FROM order_detail_estimates;
+DELETE FROM order_estimate_materials;
+DELETE FROM order_estimate_services;
+DELETE FROM order_estimate_settings;
+DELETE FROM order_calculations;
+DELETE FROM order_stages;
+DELETE FROM orders;
+
+-- ── Проекты ──────────────────────────────────────────────
+DELETE FROM project_members;
+DELETE FROM project_stage_assignees;
+DELETE FROM project_history;
+DELETE FROM stage_files;
+DELETE FROM stage_operations;
+DELETE FROM operation_materials;
+DELETE FROM project_stages;
+DELETE FROM projects;
+
+-- ── Задачи ───────────────────────────────────────────────
+DELETE FROM tasks;
+
+-- ── Расходы цеха ─────────────────────────────────────────
+DELETE FROM workshop_expenses;
+
+-- ── Клиенты ──────────────────────────────────────────────
+DELETE FROM client_balance;
+DELETE FROM clients;
+
+-- ── Табели и зарплаты ────────────────────────────────────
+DELETE FROM salary_payments;
+DELETE FROM timesheets;
+DELETE FROM master_wages;
+
+-- ── Зарплаты сотрудников (ставки) ────────────────────────
+UPDATE users SET salary = NULL, hourly_rate = NULL;
+
+-- ── Сброс последовательностей (если есть) ────────────────
+-- Сброс счётчика расходных накладных EXT-XXX
+ALTER SEQUENCE IF EXISTS outgoing_invoice_ext_seq RESTART WITH 1;
+
+COMMIT;
+
+-- ============================================================
+-- Проверка — должны вернуть 0
+-- ============================================================
+SELECT 'orders'                AS tbl, COUNT(*) FROM orders
+UNION ALL SELECT 'outgoing_invoices',  COUNT(*) FROM outgoing_invoices
+UNION ALL SELECT 'warehouse_receipts', COUNT(*) FROM warehouse_receipts
+UNION ALL SELECT 'warehouse_expenses', COUNT(*) FROM warehouse_expenses
+UNION ALL SELECT 'clients',            COUNT(*) FROM clients
+UNION ALL SELECT 'projects',           COUNT(*) FROM projects
+UNION ALL SELECT 'tasks',              COUNT(*) FROM tasks
+UNION ALL SELECT 'workshop_expenses',  COUNT(*) FROM workshop_expenses
+UNION ALL SELECT 'timesheets',         COUNT(*) FROM timesheets;
 
 ### 1. Установи инструменты
 

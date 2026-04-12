@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 
 	"jevon/internal/middleware"
@@ -20,6 +21,7 @@ func NewOutgoingInvoiceHandler(repo *repository.OutgoingInvoiceRepo) *OutgoingIn
 func (h *OutgoingInvoiceHandler) List(c *gin.Context) {
 	invoices, err := h.repo.List(c, c.Query("status"), c.Query("order_id"))
 	if err != nil {
+		log.Printf("❌ OutgoingInvoice List error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -32,6 +34,7 @@ func (h *OutgoingInvoiceHandler) List(c *gin.Context) {
 func (h *OutgoingInvoiceHandler) Get(c *gin.Context) {
 	inv, err := h.repo.GetByID(c, c.Param("id"))
 	if err != nil {
+		log.Printf("❌ OutgoingInvoice Get error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -55,6 +58,7 @@ func (h *OutgoingInvoiceHandler) Create(c *gin.Context) {
 	}
 	inv, err := h.repo.Create(c, req, claims.UserID)
 	if err != nil {
+		log.Printf("❌ OutgoingInvoice Create error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -62,19 +66,22 @@ func (h *OutgoingInvoiceHandler) Create(c *gin.Context) {
 }
 
 func (h *OutgoingInvoiceHandler) Confirm(c *gin.Context) {
-	result, err := h.repo.Confirm(c, c.Param("id"))
+	id := c.Param("id")
+	log.Printf("🔄 Confirm invoice: %s", id)
+	result, err := h.repo.Confirm(c, id)
 	if err != nil {
+		log.Printf("❌ Confirm error for %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	// Если pending_purchase — возвращаем 200 с деталями дефицита
-	// Фронтенд сам решает как показать сообщение
+	log.Printf("✅ Confirm result: status=%s", result.Status)
 	c.JSON(http.StatusOK, result)
 }
 
 func (h *OutgoingInvoiceHandler) Cancel(c *gin.Context) {
-	if err := h.repo.Cancel(c, c.Param("id")); err != nil {
+	id := c.Param("id")
+	if err := h.repo.Cancel(c, id); err != nil {
+		log.Printf("❌ Cancel error for %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

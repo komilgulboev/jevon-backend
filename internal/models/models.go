@@ -5,21 +5,65 @@ import "time"
 // ─── Проект ───────────────────────────────────────────────
 
 type Project struct {
-	ID            string    `json:"id"`
-	ProjectNumber int       `json:"project_number"`
-	CurrentStage  string    `json:"current_stage"`
-	Title         string    `json:"title"`
-	Description   string    `json:"description"`
-	ClientName    string    `json:"client_name"`
-	ClientPhone   string    `json:"client_phone"`
-	Status        string    `json:"status"`
-	Priority      string    `json:"priority"`
-	Deadline      *string   `json:"deadline"`
-	CreatedBy     string    `json:"created_by"`
-	Progress      int       `json:"progress"`
-	TotalTasks    int       `json:"total_tasks"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"id"`
+	ProjectNumber int    `json:"project_number"`
+	Title         string `json:"title"`
+	ClientID      string `json:"client_id"`
+	ClientName    string `json:"client_name"`
+	ClientPhone   string `json:"client_phone"`
+	Status        string `json:"status"`
+	Priority      string `json:"priority"`
+	Deadline      string `json:"deadline"`
+	CreatedBy     string `json:"created_by"`
+	CreatedAt     string `json:"created_at"`
+	Notes         string `json:"notes"`
+	OrderCount    int    `json:"order_count"`
+	// Старые поля — оставляем для совместимости
+	CurrentStage string `json:"current_stage"`
+	Progress     int    `json:"progress"`
+	TotalTasks   int    `json:"total_tasks"`
+}
+
+type ProjectOrder struct {
+	ID            string  `json:"id"`
+	OrderNumber   int     `json:"order_number"`
+	OrderType     string  `json:"order_type"`
+	Title         string  `json:"title"`
+	ClientName    string  `json:"client_name"`
+	ClientPhone   string  `json:"client_phone"`
+	Status        string  `json:"status"`
+	PaymentStatus string  `json:"payment_status"`
+	FinalCost     float64 `json:"final_cost"`
+	PaidAmount    float64 `json:"paid_amount"`
+	Deadline      string  `json:"deadline"`
+	CurrentStage  string  `json:"current_stage"`
+	Progress      int     `json:"progress"`
+	TotalStages   int     `json:"total_stages"`
+	DoneStages    int     `json:"done_stages"`
+}
+
+type CreateProjectRequest struct {
+	Title       string   `json:"title" binding:"required"`
+	Description string   `json:"description"`
+	ClientID    string   `json:"client_id"`
+	ClientName  string   `json:"client_name"`
+	ClientPhone string   `json:"client_phone"`
+	Status      string   `json:"status"`
+	Priority    string   `json:"priority"`
+	Deadline    string   `json:"deadline"`
+	Notes       string   `json:"notes"`
+	OrderIDs    []string `json:"order_ids"`
+	MemberIDs   []string `json:"member_ids"`
+}
+
+type UpdateProjectRequest struct {
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Priority    string `json:"priority"`
+	Deadline    string `json:"deadline"`
+	ClientName  string `json:"client_name"`
+	ClientPhone string `json:"client_phone"`
+	Notes       string `json:"notes"`
 }
 
 // ─── Задача ───────────────────────────────────────────────
@@ -37,28 +81,6 @@ type Task struct {
 	DueDate        *string   `json:"due_date"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-// ─── Request DTOs ─────────────────────────────────────────
-
-type CreateProjectRequest struct {
-	Title       string   `json:"title"       binding:"required"`
-	Description string   `json:"description"`
-	ClientName  string   `json:"client_name"`
-	ClientPhone string   `json:"client_phone"`
-	Status      string   `json:"status"`
-	Priority    string   `json:"priority"`
-	Deadline    *string  `json:"deadline"`
-	MemberIDs   []string `json:"member_ids"`
-}
-
-type UpdateProjectRequest struct {
-	Title       *string `json:"title"`
-	Status      *string `json:"status"`
-	Priority    *string `json:"priority"`
-	Deadline    *string `json:"deadline"`
-	ClientName  *string `json:"client_name"`
-	ClientPhone *string `json:"client_phone"`
 }
 
 type CreateTaskRequest struct {
