@@ -84,7 +84,10 @@ type Order struct {
 	ManagerID     string    `json:"manager_id"`
 	ManagerName   string    `json:"manager_name"`
 	CreatedBy     string    `json:"created_by"`
+	ParentOrderID string `json:"parent_order_id"`
 	CreatedAt     time.Time `json:"created_at"`
+	ProjectID     string    `json:"project_id"`
+	ProjectTitle  string    `json:"project_title"`
 }
 
 type CreateOrderRequest struct {
@@ -100,6 +103,8 @@ type CreateOrderRequest struct {
 	Deadline      *string `json:"deadline"`
 	EstimatedCost float64 `json:"estimated_cost"`
 	ManagerID     string  `json:"manager_id"`
+	ParentOrderID string  `json:"parent_order_id"`
+	ProjectID     string  `json:"project_id"`
 }
 
 type UpdateOrderRequest struct {
@@ -117,6 +122,29 @@ type UpdateOrderRequest struct {
 	Vehicle       *string  `json:"vehicle"`
 	DistanceKm    *float64 `json:"distance_km"`
 	FuelExpense   *float64 `json:"fuel_expense"`
+}
+
+// ── Связи заказов ─────────────────────────────────────────
+
+var EstimateGroupToOrderType = map[string]string{
+	"sawing":   "cutting",
+	"cnc":      "cnc",
+	"painting": "painting",
+	"gluing":   "soft_fabric",
+}
+
+type OrderServiceLink struct {
+	ID                string    `json:"id"`
+	ParentOrderID     string    `json:"parent_order_id"`
+	ChildOrderID      string    `json:"child_order_id"`
+	ServiceType       string    `json:"service_type"`
+	Amount            float64   `json:"amount"`
+	CreatedAt         time.Time `json:"created_at"`
+	ChildOrderNumber  int       `json:"child_order_number"`
+	ChildOrderType    string    `json:"child_order_type"`
+	ChildStatus       string    `json:"child_status"`
+	ChildTitle        string    `json:"child_title"`
+	ChildCurrentStage string    `json:"child_current_stage"`
 }
 
 // ── Этапы заказа ─────────────────────────────────────────
@@ -261,71 +289,67 @@ type OrderHistory struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// ── Лейблы этапов ────────────────────────────────────────
+// ── Лейблы ───────────────────────────────────────────────
 
+// OrderTypeLabels — два типа: цех и вне цеха
 var OrderTypeLabels = map[string]string{
-	"workshop":       "Заказ цеха",
-	"cutting":        "Распил",
-	"painting":       "Покраска",
-	"cnc":            "ЧПУ",
-	"soft_fabric":    "Мягкая мебель (обивка)",
-	"soft_furniture": "Производство мебели",
+	"workshop": "Заказ цеха",
+	"external": "Заказ вне цеха",
 }
 
+// StageLabelsByType — одинаковые этапы для обоих типов
 var StageLabelsByType = map[string]map[string]string{
-	"workshop": {
-		"intake": "Приём заказа", "measure": "Замер",
-		"design": "Дизайн/Смета", "purchase": "Закупка",
-		"production": "Производство", "assembly": "Сборка",
-		"delivery": "Доставка", "handover": "Сдача клиенту",
-	},
-	"cutting": {
-		"intake": "Приём заказа", "material": "Приём материала",
-		"sawing": "Распил", "edging": "Кромкование",
-		"drilling": "Присадка", "packing": "Упаковка",
-		"shipment": "Отгрузка",
-	},
-	"painting": {
-		"intake": "Приём деталей", "calculate": "Расчёт",
-		"sanding": "Шлифовка", "priming": "Грунтовка",
-		"painting": "Покраска", "delivery": "Выдача",
-	},
-	"cnc": {
-		"intake": "Приём заказа", "calculate": "Расчёт",
-		"cnc_work": "Фрезеровка", "delivery": "Выдача",
-	},
-	"soft_fabric": {
-		"intake": "Приём заказа", "calculate": "Расчёт",
-		"assign": "Назначение мастера", "work": "Работа",
-		"delivery": "Выдача",
-	},
-	"soft_furniture": {
-		"intake": "Приём заказа", "design": "Дизайн",
-		"purchase": "Закупка", "production": "Производство",
-		"delivery": "Доставка",
-	},
+    "workshop": {
+        // Основные этапы заказа
+        "intake":     "Приём заказа",
+        "measure":    "Замер",
+        "design":     "Дизайн/Смета",
+        "purchase":   "Закупка",
+        "production": "Производство",
+        "assembly":   "Сборка",
+        "delivery":   "Доставка",
+        "handover":   "Сдача клиенту",
+        // Под-этапы Распила
+        "material":   "Приём материала",
+        "sawing":     "Распил",
+        "edging":     "Кромкование",
+        "drilling":   "Присадка",
+        "packing":    "Упаковка",
+        "shipment":   "Отгрузка",
+        // Под-этапы Покраски
+        "calculate":  "Расчёт",
+        "sanding":    "Шлифовка",
+        "priming":    "Грунтовка",
+        "painting":   "Покраска",
+        // Под-этапы ЧПУ
+        "cnc_work":   "Фрезеровка",
+        // Под-этапы Мягкой мебели
+        "assign":     "Назначение мастера",
+        "work":       "Работа",
+    },
+    "external": { /* те же самые */ },
 }
 
 var StageRoles = map[string][]string{
-	"intake":      {"manager", "admin", "supervisor"},
-	"measure":     {"manager", "admin", "supervisor"},
-	"design":      {"designer", "admin", "supervisor"},
-	"purchase":    {"manager", "admin", "supervisor"},
-	"production":  {"master", "cutter", "admin", "supervisor"},
-	"assembly":    {"assembler", "master", "admin", "supervisor"},
-	"delivery":    {"driver", "admin", "supervisor"},
-	"handover":    {"manager", "admin", "supervisor"},
-	"material":    {"warehouse", "admin", "supervisor"},
-	"sawing":      {"cutter", "master", "admin", "supervisor"},
-	"edging":      {"cutter", "master", "admin", "supervisor"},
-	"drilling":    {"cutter", "master", "admin", "supervisor"},
-	"packing":     {"warehouse", "cutter", "admin", "supervisor"},
-	"shipment":    {"manager", "warehouse", "admin", "supervisor"},
-	"calculate":   {"manager", "master", "admin", "supervisor"},
-	"sanding":     {"painter", "master", "admin", "supervisor"},
-	"priming":     {"painter", "master", "admin", "supervisor"},
-	"painting":    {"painter", "master", "admin", "supervisor"},
-	"cnc_work":    {"cnc_operator", "admin", "supervisor"},
-	"assign":      {"supervisor", "admin"},
-	"work":        {"upholsterer", "master", "admin", "supervisor"},
+	"intake":     {"manager", "admin", "supervisor"},
+	"measure":    {"manager", "admin", "supervisor"},
+	"design":     {"designer", "admin", "supervisor"},
+	"purchase":   {"manager", "admin", "supervisor"},
+	"production": {"master", "cutter", "admin", "supervisor"},
+	"assembly":   {"assembler", "master", "admin", "supervisor"},
+	"delivery":   {"driver", "admin", "supervisor"},
+	"handover":   {"manager", "admin", "supervisor"},
+	"material":   {"warehouse", "admin", "supervisor"},
+	"sawing":     {"cutter", "master", "admin", "supervisor"},
+	"edging":     {"cutter", "master", "admin", "supervisor"},
+	"drilling":   {"cutter", "master", "admin", "supervisor"},
+	"packing":    {"warehouse", "cutter", "admin", "supervisor"},
+	"shipment":   {"manager", "warehouse", "admin", "supervisor"},
+	"calculate":  {"manager", "master", "admin", "supervisor"},
+	"sanding":    {"painter", "master", "admin", "supervisor"},
+	"priming":    {"painter", "master", "admin", "supervisor"},
+	"painting":   {"painter", "master", "admin", "supervisor"},
+	"cnc_work":   {"cnc_operator", "admin", "supervisor"},
+	"assign":     {"supervisor", "admin"},
+	"work":       {"upholsterer", "master", "admin", "supervisor"},
 }

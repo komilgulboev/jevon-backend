@@ -34,7 +34,7 @@ func (r *TaskRepo) List(ctx context.Context, userID, roleName, projectID, assign
 	args := []interface{}{}
 	n := 1
 
-	if roleName == "master" || roleName == "assistant" {
+	if roleName != "admin" && roleName != "supervisor" && roleName != "manager" {
 		query += fmt.Sprintf(" AND CAST(t.assigned_to AS TEXT) = $%d", n)
 		args = append(args, userID)
 		n++

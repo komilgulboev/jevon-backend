@@ -52,6 +52,7 @@ type MinIOConfig struct {
 	AccessKey      string
 	SecretKey      string
 	UseSSL         bool
+	PublicURL      string // публичный URL для браузера (например https://domain.com/files)
 	BucketProjects string
 	BucketDesign   string
 	BucketCutting  string
@@ -113,6 +114,7 @@ func Load() *Config {
 			AccessKey:      getEnv("MINIO_ACCESS_KEY", "jevon_backend"),
 			SecretKey:      getEnv("MINIO_SECRET_KEY", "JevonBackend@2026"),
 			UseSSL:         getEnv("MINIO_USE_SSL", "false") == "true",
+			PublicURL:      getEnv("MINIO_PUBLIC_URL", ""),
 			BucketProjects: getEnv("MINIO_BUCKET_PROJECTS", "jevon-projects"),
 			BucketDesign:   getEnv("MINIO_BUCKET_DESIGN", "jevon-design"),
 			BucketCutting:  getEnv("MINIO_BUCKET_CUTTING", "jevon-cutting"),

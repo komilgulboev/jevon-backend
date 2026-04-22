@@ -12,6 +12,7 @@
 
 ## Быстрый старт
 Создание билда
+http://localhost:8181/swagger/index.html#/
 
 Создаем билд на фронте через
 npm run build

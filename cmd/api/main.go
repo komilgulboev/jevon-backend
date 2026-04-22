@@ -9,7 +9,10 @@
 package main
 
 import (
+	"io"
 	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -52,19 +55,20 @@ func main() {
 	authSvc := auth.NewService(cfg.JWT)
 
 	// ── Repositories ─────────────────────────────────────────
-	userRepo            := repository.NewUserRepo(database)
-	projectRepo         := repository.NewProjectRepo(database)
-	taskRepo            := repository.NewTaskRepo(database)
-	dashRepo            := repository.NewDashboardRepo(database)
-	pipelineRepo        := repository.NewPipelineRepo(database)
-	orderRepo           := repository.NewOrderRepo(database)
-	estimateRepo        := repository.NewEstimateRepo(database)
-	detailEstimateRepo  := repository.NewDetailEstimateRepo(database)
-	warehouseRepo       := repository.NewWarehouseRepo(database)
-	clientBalanceRepo   := repository.NewClientBalanceRepo(database)
-	expenseRepo         := repository.NewWorkshopExpenseRepo(database)
-	assigneeRepo        := repository.NewStageAssigneeRepo(database)
-	outgoingInvoiceRepo := repository.NewOutgoingInvoiceRepo(database)
+	userRepo                  := repository.NewUserRepo(database)
+	projectRepo               := repository.NewProjectRepo(database)
+	taskRepo                  := repository.NewTaskRepo(database)
+	dashRepo                  := repository.NewDashboardRepo(database)
+	pipelineRepo              := repository.NewPipelineRepo(database)
+	orderRepo                 := repository.NewOrderRepo(database)
+	estimateRepo              := repository.NewEstimateRepo(database)
+	detailEstimateRepo        := repository.NewDetailEstimateRepo(database)
+	warehouseRepo             := repository.NewWarehouseRepo(database)
+	clientBalanceRepo         := repository.NewClientBalanceRepo(database)
+	expenseRepo               := repository.NewWorkshopExpenseRepo(database)
+	assigneeRepo              := repository.NewStageAssigneeRepo(database)
+	outgoingInvoiceRepo       := repository.NewOutgoingInvoiceRepo(database)
+	estimateSectionStagesRepo := repository.NewEstimateSectionStagesRepo(database)
 
 	// ── Handlers ─────────────────────────────────────────────
 	authH            := handlers.NewAuthHandler(userRepo, authSvc)
@@ -76,13 +80,14 @@ func main() {
 	uploadH          := handlers.NewUploadHandler(minioSvc, pipelineRepo)
 	uploadH.SetOrderRepo(orderRepo)
 	orderH           := handlers.NewOrderHandler(orderRepo)
-	estimateH        := handlers.NewEstimateHandler(estimateRepo)
-	detailEstimateH  := handlers.NewDetailEstimateHandler(detailEstimateRepo)
+	estimateH        := handlers.NewEstimateHandler(estimateRepo, orderRepo)
+	detailEstimateH  := handlers.NewDetailEstimateHandler(detailEstimateRepo, orderRepo)
 	warehouseH       := handlers.NewWarehouseHandler(warehouseRepo)
 	clientBalanceH   := handlers.NewClientBalanceHandler(clientBalanceRepo)
 	expenseH         := handlers.NewWorkshopExpenseHandler(expenseRepo)
 	assigneeH        := handlers.NewStageAssigneeHandler(assigneeRepo)
 	outgoingInvoiceH := handlers.NewOutgoingInvoiceHandler(outgoingInvoiceRepo)
+	estimateStagesH  := handlers.NewEstimateSectionStagesHandler(estimateSectionStagesRepo)
 
 	// ── Router ───────────────────────────────────────────────
 	r := gin.New()
@@ -100,6 +105,50 @@ func main() {
 	}))
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// ════════════════════════════════════════════════════════════
+	// PROXY для MinIO — отдаёт файлы через бэкенд без открытия
+	// прямого доступа к MinIO серверу
+	// URL формат: /files/{bucket}/{folder}/{uuid.ext}
+	// ════════════════════════════════════════════════════════════
+	r.GET("/files/*path", func(c *gin.Context) {
+		if minioSvc == nil {
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
+
+		filePath := strings.TrimPrefix(c.Param("path"), "/")
+		parts := strings.SplitN(filePath, "/", 2)
+		if len(parts) < 2 {
+			c.Status(http.StatusBadRequest)
+			return
+		}
+		bucket     := parts[0]
+		objectName := parts[1]
+
+		obj, err := minioSvc.GetObject(c.Request.Context(), bucket, objectName)
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		defer obj.Close()
+
+		stat, err := obj.Stat()
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+
+		contentType := stat.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+
+		c.Header("Content-Type", contentType)
+		c.Header("Cache-Control", "public, max-age=86400")
+		c.Status(http.StatusOK)
+		io.Copy(c.Writer, obj)
+	})
 
 	api := r.Group("/api")
 
@@ -147,14 +196,13 @@ func main() {
 	// ════════════════════════════════════════════════════════════
 	// ПРОЕКТЫ
 	// ════════════════════════════════════════════════════════════
-	p.GET("/projects",                middleware.RequireRole("admin", "supervisor", "manager"), projH.List)
+	p.GET("/projects",                projH.List)
+	p.GET("/projects/:project_id",    projH.Get)
 	p.POST("/projects",               middleware.RequireRole("admin", "supervisor", "manager"), projH.Create)
-	p.GET("/projects/:project_id",    middleware.RequireRole("admin", "supervisor", "manager"), projH.Get)
 	p.PATCH("/projects/:project_id",  middleware.RequireRole("admin", "supervisor", "manager"), projH.Update)
 	p.DELETE("/projects/:project_id", middleware.RequireRole("admin"),                          projH.Delete)
 
-	// Заказы проекта
-	p.GET("/projects/:project_id/orders",              middleware.RequireRole("admin", "supervisor", "manager"), projH.GetOrders)
+	p.GET("/projects/:project_id/orders",              projH.GetOrders)
 	p.POST("/projects/:project_id/orders",             middleware.RequireRole("admin", "supervisor", "manager"), projH.AddOrder)
 	p.DELETE("/projects/:project_id/orders/:order_id", middleware.RequireRole("admin", "supervisor", "manager"), projH.RemoveOrder)
 
@@ -237,10 +285,17 @@ func main() {
 	p.POST("/orders/:order_id/detail-estimate",                 detailEstimateH.SaveSection)
 	p.DELETE("/orders/:order_id/detail-estimate/:service_type", detailEstimateH.DeleteSection)
 
+	p.GET("/orders/:order_id/estimate-stages",                     estimateStagesH.GetByOrder)
+	p.PATCH("/orders/:order_id/estimate-stages/:stage_id",         estimateStagesH.UpdateStage)
+	p.POST("/orders/:order_id/estimate-stages/:stage_id/complete", estimateStagesH.CompleteStage)
+
 	p.GET("/orders/:order_id/expenses",  orderH.ExpensesList)
 	p.POST("/orders/:order_id/expenses", middleware.RequireRole("admin", "supervisor", "manager"), orderH.ExpenseCreate)
 	p.DELETE("/orders/:order_id/expenses/:expense_id",
 		middleware.RequireRole("admin", "supervisor", "manager"), orderH.ExpenseDelete)
+
+	p.GET("/orders/:order_id/service-links", orderH.ServiceLinks)
+	p.PUT("/orders/:order_id/project",       orderH.LinkProject)
 
 	// ════════════════════════════════════════════════════════════
 	// РАСХОДЫ
@@ -294,7 +349,7 @@ func main() {
 	p.DELETE("/warehouse/receipts/:id/payments/:payment_id",
 		middleware.RequireRole("admin", "supervisor"), warehouseH.PaymentDelete)
 
-	p.GET("/warehouse/outgoing-invoices",    outgoingInvoiceH.List)
+	p.GET("/warehouse/outgoing-invoices",     outgoingInvoiceH.List)
 	p.GET("/warehouse/outgoing-invoices/:id", outgoingInvoiceH.Get)
 	p.POST("/warehouse/outgoing-invoices",
 		middleware.RequireRole("admin", "supervisor", "manager", "seller"), outgoingInvoiceH.Create)

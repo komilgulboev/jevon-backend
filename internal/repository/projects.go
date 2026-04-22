@@ -36,6 +36,23 @@ func (r *ProjectRepo) List(ctx context.Context, userID, roleName, status string)
 	args := []interface{}{}
 	n := 1
 
+	if roleName != "admin" && roleName != "supervisor" && roleName != "manager" {
+		query += fmt.Sprintf(` AND p.id IN (
+			SELECT DISTINCT po2.project_id FROM project_orders po2
+			JOIN orders o ON o.id = po2.order_id
+			JOIN order_stages os ON os.order_id = o.id
+			WHERE os.assigned_to = $%d
+			UNION
+			SELECT DISTINCT po2.project_id FROM project_orders po2
+			JOIN orders o ON o.id = po2.order_id
+			JOIN order_stages os ON os.order_id = o.id
+			JOIN order_stage_assignees osa ON osa.stage_id = os.id
+			WHERE osa.user_id = $%d
+		)`, n, n)
+		args = append(args, userID)
+		n++
+	}
+
 	if status != "" {
 		query += fmt.Sprintf(" AND p.status = $%d", n)
 		args = append(args, status)

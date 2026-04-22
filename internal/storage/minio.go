@@ -66,19 +66,25 @@ func (s *MinIOService) Upload(
 		contentType = "application/octet-stream"
 	}
 
-	// Загружаем в MinIO
+	// Загружаем в MinIO (всегда через внутренний Endpoint)
 	_, err = s.client.PutObject(ctx, bucket, objectName, file, header.Size,
 		minio.PutObjectOptions{ContentType: contentType})
 	if err != nil {
 		return "", "", fmt.Errorf("upload error: %w", err)
 	}
 
-	// Формируем публичный URL
-	scheme := "http"
-	if s.cfg.UseSSL {
-		scheme = "https"
+	// Формируем публичный URL для браузера
+	// Если задан PublicURL — используем его (через Go proxy)
+	// Иначе — прямой URL к MinIO
+	if s.cfg.PublicURL != "" {
+		fileURL = fmt.Sprintf("%s/%s/%s", strings.TrimRight(s.cfg.PublicURL, "/"), bucket, objectName)
+	} else {
+		scheme := "http"
+		if s.cfg.UseSSL {
+			scheme = "https"
+		}
+		fileURL = fmt.Sprintf("%s://%s/%s/%s", scheme, s.cfg.Endpoint, bucket, objectName)
 	}
-	fileURL = fmt.Sprintf("%s://%s/%s/%s", scheme, s.cfg.Endpoint, bucket, objectName)
 
 	return fileURL, header.Filename, nil
 }
@@ -119,32 +125,71 @@ func (s *MinIOService) UploadMultiple(
 
 // Delete удаляет файл из MinIO
 func (s *MinIOService) Delete(ctx context.Context, fileURL string) error {
-	// Извлекаем bucket и objectName из URL
-	// URL формат: http://endpoint/bucket/folder/uuid.ext
-	parts := strings.SplitN(fileURL, "/", 5)
-	if len(parts) < 5 {
-		return fmt.Errorf("invalid file URL: %s", fileURL)
+	bucket, objectName, err := s.parseURL(fileURL)
+	if err != nil {
+		return err
 	}
-	bucket := parts[3]
-	objectName := parts[4]
-
 	return s.client.RemoveObject(ctx, bucket, objectName, minio.RemoveObjectOptions{})
 }
 
 // PresignedURL генерирует временный URL для приватного доступа
 func (s *MinIOService) PresignedURL(ctx context.Context, fileURL string, expiry time.Duration) (string, error) {
-	parts := strings.SplitN(fileURL, "/", 5)
-	if len(parts) < 5 {
-		return "", fmt.Errorf("invalid file URL")
+	bucket, objectName, err := s.parseURL(fileURL)
+	if err != nil {
+		return "", err
 	}
-	bucket := parts[3]
-	objectName := parts[4]
-
 	url, err := s.client.PresignedGetObject(ctx, bucket, objectName, expiry, nil)
 	if err != nil {
 		return "", err
 	}
 	return url.String(), nil
+}
+
+// GetObject возвращает объект из MinIO по bucket и objectName
+func (s *MinIOService) GetObject(ctx context.Context, bucket, objectName string) (*minio.Object, error) {
+	return s.client.GetObject(ctx, bucket, objectName, minio.GetObjectOptions{})
+}
+
+// parseURL извлекает bucket и objectName из URL файла
+// Поддерживает оба формата:
+//   - http://endpoint/bucket/folder/uuid.ext  (прямой MinIO URL)
+//   - https://domain.com/files/bucket/folder/uuid.ext  (через proxy)
+func (s *MinIOService) parseURL(fileURL string) (bucket, objectName string, err error) {
+	// Убираем схему
+	withoutScheme := fileURL
+	if idx := strings.Index(fileURL, "://"); idx >= 0 {
+		withoutScheme = fileURL[idx+3:]
+	}
+	// Убираем хост
+	slashIdx := strings.Index(withoutScheme, "/")
+	if slashIdx < 0 {
+		return "", "", fmt.Errorf("invalid file URL: %s", fileURL)
+	}
+	path := withoutScheme[slashIdx+1:]
+
+	// Если PublicURL задан — path может начинаться с prefix
+	if s.cfg.PublicURL != "" {
+		prefix := strings.TrimRight(s.cfg.PublicURL, "/")
+		// Убираем схему и хост из PublicURL
+		if idx := strings.Index(prefix, "://"); idx >= 0 {
+			prefix = prefix[idx+3:]
+		}
+		if pSlash := strings.Index(prefix, "/"); pSlash >= 0 {
+			prefix = prefix[pSlash+1:]
+		} else {
+			prefix = ""
+		}
+		if prefix != "" && strings.HasPrefix(path, prefix+"/") {
+			path = path[len(prefix)+1:]
+		}
+	}
+
+	// path теперь: bucket/folder/uuid.ext
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("invalid file path: %s", path)
+	}
+	return parts[0], parts[1], nil
 }
 
 // UploadedFile результат загрузки файла

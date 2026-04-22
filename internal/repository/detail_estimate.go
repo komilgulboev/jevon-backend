@@ -20,12 +20,23 @@ var ServiceTypeSubtitles = map[string]string{
 	"cutting":  "От чертежа до готовой детали.",
 }
 
+var DetailServiceToOrderType = map[string]string{
+	"cnc":      "cnc",
+	"painting": "painting",
+	"soft":     "soft_fabric",
+	"cutting":  "cutting",
+}
+
 type DetailEstimateRepo struct {
-	db *sql.DB
+	db         *sql.DB
+	stagesRepo *EstimateSectionStagesRepo
 }
 
 func NewDetailEstimateRepo(db *sql.DB) *DetailEstimateRepo {
-	return &DetailEstimateRepo{db: db}
+	return &DetailEstimateRepo{
+		db:         db,
+		stagesRepo: NewEstimateSectionStagesRepo(db),
+	}
 }
 
 type DetailEstimateRow struct {
@@ -87,8 +98,8 @@ func (r *DetailEstimateRepo) GetByOrder(ctx context.Context, orderID string) ([]
 			id, order_id, service_type, row_order,
 			detail_name, width_mm, height_mm, quantity, area_m2,
 			unit_price, total_price,
-			COALESCE(product_id::text, '')   AS product_id,
-			COALESCE(product_name, '')        AS product_name
+			COALESCE(product_id::text, '')  AS product_id,
+			COALESCE(product_name, '')       AS product_name
 		FROM order_detail_estimates
 		WHERE order_id = $1::uuid
 		ORDER BY service_type, row_order
@@ -155,11 +166,12 @@ func (r *DetailEstimateRepo) GetByOrder(ctx context.Context, orderID string) ([]
 	return result, nil
 }
 
-// SaveSection — сохраняет один раздел сметы
-func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy string, req SaveDetailEstimateRequest) error {
+// SaveSection — сохраняет один раздел сметы.
+// Возвращает totalPrice раздела для создания дочернего заказа.
+func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy string, req SaveDetailEstimateRequest) (float64, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 
@@ -168,11 +180,11 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		DELETE FROM order_detail_estimates
 		WHERE order_id = $1::uuid AND service_type = $2
 	`, orderID, req.ServiceType); err != nil {
-		return fmt.Errorf("delete rows: %w", err)
+		return 0, fmt.Errorf("delete rows: %w", err)
 	}
 
 	// 2. Вставляем новые строки
-	var totalM2, totalPrice float64
+	var totalM2 float64
 	for i, row := range req.Rows {
 		if row.DetailName == "" {
 			continue
@@ -181,32 +193,32 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 			row.Quantity = 1
 		}
 		m2 := (row.WidthMM / 1000.0) * (row.HeightMM / 1000.0) * float64(row.Quantity)
-		tp := m2 * row.UnitPrice
 		totalM2 += m2
-		totalPrice += tp
-
-		// product_id может быть пустым
-		var productID interface{}
-		if row.ProductID != "" {
-			productID = row.ProductID
-		}
 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO order_detail_estimates
 				(order_id, service_type, row_order, detail_name,
-				 width_mm, height_mm, quantity, unit_price, created_by,
-				 product_id, product_name)
+				 width_mm, height_mm, quantity, unit_price,
+				 created_by, product_id, product_name)
 			VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8,
 			        NULLIF($9,'')::uuid,
-			        $10::uuid, $11)
+			        NULLIF($10::text,'')::uuid, $11)
 		`, orderID, req.ServiceType, i,
 			row.DetailName, row.WidthMM, row.HeightMM,
-			row.Quantity, row.UnitPrice, savedBy,
-			productID, row.ProductName,
+			row.Quantity, row.UnitPrice,
+			savedBy, row.ProductID, row.ProductName,
 		); err != nil {
-			return fmt.Errorf("insert row %d: %w", i, err)
+			return 0, fmt.Errorf("insert row %d: %w", i, err)
 		}
 	}
+
+	// Берём totalPrice из БД (area_m2 и total_price — GENERATED колонки)
+	var totalPrice float64
+	tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(total_price), 0)
+		FROM order_detail_estimates
+		WHERE order_id = $1::uuid AND service_type = $2
+	`, orderID, req.ServiceType).Scan(&totalPrice)
 
 	// 3. Upsert настроек раздела
 	s := req.Settings
@@ -228,7 +240,7 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		s.SectionTitle, s.SectionSubtitle,
 		s.Deadline, s.DeliveryDate, s.Notes,
 	); err != nil {
-		return fmt.Errorf("upsert settings: %w", err)
+		return 0, fmt.Errorf("upsert settings: %w", err)
 	}
 
 	// 4. Логируем в историю
@@ -250,7 +262,25 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		WHERE id = $1::uuid
 	`, orderID)
 
-	return tx.Commit()
+	// 6. Синхронизируем этапы сметы
+	r.stagesRepo.EnsureStagesForSection(ctx, orderID, req.ServiceType)
+
+	// 7. Для external-заказов: авто-синхронизация расхода «Материалы» в workshop_expenses
+	var orderType string
+	_ = tx.QueryRowContext(ctx,
+		`SELECT order_type FROM orders WHERE id = $1::uuid`, orderID,
+	).Scan(&orderType)
+	if orderType == "external" {
+		var matTotal float64
+		_ = tx.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(total_price), 0)
+			FROM order_estimate_materials
+			WHERE order_id = $1
+		`, orderID).Scan(&matTotal)
+		syncMaterialsExpense(ctx, tx, orderID, matTotal)
+	}
+
+	return totalPrice, tx.Commit()
 }
 
 // DeleteSection — удаляет раздел сметы
@@ -259,5 +289,53 @@ func (r *DetailEstimateRepo) DeleteSection(ctx context.Context, orderID, service
 		DELETE FROM order_detail_estimates
 		WHERE order_id = $1::uuid AND service_type = $2
 	`, orderID, serviceType)
+	r.stagesRepo.DeleteBySection(ctx, orderID, serviceType)
 	return err
+}
+
+// CopyToChildOrder — копирует строки сметы из родительского заказа в дочерний
+func (r *DetailEstimateRepo) CopyToChildOrder(ctx context.Context, parentOrderID, childOrderID, serviceType string) error {
+	_, err := r.db.ExecContext(ctx, `
+		DELETE FROM order_detail_estimates
+		WHERE order_id = $1::uuid AND service_type = $2
+	`, childOrderID, serviceType)
+	if err != nil {
+		return fmt.Errorf("delete child rows: %w", err)
+	}
+
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO order_detail_estimates
+			(order_id, service_type, row_order, detail_name,
+			 width_mm, height_mm, quantity, unit_price,
+			 product_id, product_name)
+		SELECT
+			$2::uuid, service_type, row_order, detail_name,
+			width_mm, height_mm, quantity, unit_price,
+			product_id, product_name
+		FROM order_detail_estimates
+		WHERE order_id = $1::uuid AND service_type = $3
+	`, parentOrderID, childOrderID, serviceType)
+	if err != nil {
+		return fmt.Errorf("copy rows: %w", err)
+	}
+
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO order_estimate_settings
+			(order_id, service_type, section_title, section_subtitle, deadline, delivery_date, notes)
+		SELECT
+			$2::uuid, service_type, section_title, section_subtitle, deadline, delivery_date, notes
+		FROM order_estimate_settings
+		WHERE order_id = $1::uuid AND service_type = $3
+		ON CONFLICT (order_id, service_type) DO UPDATE SET
+			section_title    = EXCLUDED.section_title,
+			section_subtitle = EXCLUDED.section_subtitle,
+			deadline         = EXCLUDED.deadline,
+			delivery_date    = EXCLUDED.delivery_date,
+			notes            = EXCLUDED.notes
+	`, parentOrderID, childOrderID, serviceType)
+	if err != nil {
+		return fmt.Errorf("copy settings: %w", err)
+	}
+
+	return nil
 }

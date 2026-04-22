@@ -38,6 +38,7 @@ type EstimateServiceRow struct {
 	UnitPrice  float64 `json:"unit_price"`
 	TotalPrice float64 `json:"total_price"`
 	SortOrder  int     `json:"sort_order"`
+	GroupName  string  `json:"group_name"`
 }
 
 type EstimateMaterialRow struct {
@@ -78,6 +79,8 @@ type SaveEstimateRequest struct {
 	Materials []UpsertEstimateMaterialRequest `json:"materials"`
 	Notes     string                          `json:"notes"`
 }
+
+type GroupAmounts map[string]float64
 
 // ── Репозиторий ───────────────────────────────────────────
 
@@ -197,15 +200,17 @@ func (r *EstimateRepo) ColorList(ctx context.Context) ([]ColorItem, error) {
 // ── Смета заказа ─────────────────────────────────────────
 
 func (r *EstimateRepo) EstimateByOrder(ctx context.Context, orderID string) ([]EstimateServiceRow, []EstimateMaterialRow, float64, float64, error) {
-	// Услуги
 	sRows, err := r.db.QueryContext(ctx, `
-		SELECT id::text, order_id::text, catalog_id,
-		       name, COALESCE(color,''), COALESCE(article,''),
-		       quantity, unit, COALESCE(unit_spec,''),
-		       unit_price, total_price, sort_order
-		FROM order_estimate_services
-		WHERE order_id = $1
-		ORDER BY sort_order, created_at
+		SELECT
+			s.id::text, s.order_id::text, s.catalog_id,
+			s.name, COALESCE(s.color,''), COALESCE(s.article,''),
+			s.quantity, s.unit, COALESCE(s.unit_spec,''),
+			s.unit_price, s.total_price, s.sort_order,
+			COALESCE(c.group_name, '')
+		FROM order_estimate_services s
+		LEFT JOIN cutting_service_catalog c ON c.id = s.catalog_id
+		WHERE s.order_id = $1
+		ORDER BY s.sort_order, s.created_at
 	`, orderID)
 	if err != nil {
 		return nil, nil, 0, 0, err
@@ -221,12 +226,12 @@ func (r *EstimateRepo) EstimateByOrder(ctx context.Context, orderID string) ([]E
 			&s.Name, &s.Color, &s.Article,
 			&s.Quantity, &s.Unit, &s.UnitSpec,
 			&s.UnitPrice, &s.TotalPrice, &s.SortOrder,
+			&s.GroupName,
 		)
 		totalServices += s.TotalPrice
 		services = append(services, s)
 	}
 
-	// Материалы
 	mRows, err := r.db.QueryContext(ctx, `
 		SELECT id::text, order_id::text,
 		       name, quantity, unit, unit_price, total_price, sort_order
@@ -255,22 +260,28 @@ func (r *EstimateRepo) EstimateByOrder(ctx context.Context, orderID string) ([]E
 	return services, materials, totalServices, totalMaterials, nil
 }
 
-// SaveEstimate — полная перезапись сметы (удаляем старое, вставляем новое)
-func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string, req SaveEstimateRequest) error {
+// SaveEstimate — полная перезапись сметы.
+func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string, req SaveEstimateRequest) (GroupAmounts, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
 
-	// Удаляем старые строки
 	tx.ExecContext(ctx, `DELETE FROM order_estimate_services  WHERE order_id = $1`, orderID)
 	tx.ExecContext(ctx, `DELETE FROM order_estimate_materials WHERE order_id = $1`, orderID)
 
-	// Вставляем услуги
+	groupAmounts := GroupAmounts{}
+	var totalServices float64
+
 	for i, s := range req.Services {
-		if s.Name == "" { continue }
-		if s.Unit == "" { s.Unit = "шт" }
+		if s.Name == "" {
+			continue
+		}
+		if s.Unit == "" {
+			s.Unit = "шт"
+		}
+		rowTotal := s.Quantity * s.UnitPrice
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO order_estimate_services
 				(order_id, catalog_id, name, color, article,
@@ -283,14 +294,31 @@ func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string
 			s.Quantity, s.Unit, s.UnitSpec, s.UnitPrice, i, savedBy,
 		)
 		if err != nil {
-			return fmt.Errorf("insert service: %w", err)
+			return nil, fmt.Errorf("insert service: %w", err)
+		}
+		totalServices += rowTotal
+
+		if s.CatalogID != nil && *s.CatalogID > 0 {
+			var groupName string
+			r.db.QueryRowContext(ctx,
+				`SELECT COALESCE(group_name,'') FROM cutting_service_catalog WHERE id = $1`,
+				*s.CatalogID,
+			).Scan(&groupName)
+			if groupName != "" && rowTotal > 0 {
+				groupAmounts[groupName] += rowTotal
+			}
 		}
 	}
 
-	// Вставляем материалы
+	var totalMaterials float64
 	for i, m := range req.Materials {
-		if m.Name == "" { continue }
-		if m.Unit == "" { m.Unit = "шт" }
+		if m.Name == "" {
+			continue
+		}
+		if m.Unit == "" {
+			m.Unit = "шт"
+		}
+		totalMaterials += m.Quantity * m.UnitPrice
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO order_estimate_materials
 				(order_id, name, quantity, unit, unit_price, sort_order, created_by)
@@ -298,18 +326,10 @@ func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string
 		`, orderID, m.Name, m.Quantity, m.Unit, m.UnitPrice, i, savedBy,
 		)
 		if err != nil {
-			return fmt.Errorf("insert material: %w", err)
+			return nil, fmt.Errorf("insert material: %w", err)
 		}
 	}
 
-	// Считаем итог и обновляем estimated_cost заказа
-	var totalServices, totalMaterials float64
-	for _, s := range req.Services {
-		totalServices += s.Quantity * s.UnitPrice
-	}
-	for _, m := range req.Materials {
-		totalMaterials += m.Quantity * m.UnitPrice
-	}
 	total := totalServices + totalMaterials
 	if total > 0 {
 		tx.ExecContext(ctx,
@@ -317,7 +337,6 @@ func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string
 			total, orderID)
 	}
 
-	// Логируем в историю
 	comment := fmt.Sprintf("📋 Смета обновлена: услуг %d | материалов %d | итого %.0f сом.",
 		len(req.Services), len(req.Materials), total)
 	tx.ExecContext(ctx, `
@@ -325,5 +344,34 @@ func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string
 		VALUES ($1, 'estimate', 'estimate', NULLIF($2,'')::uuid, $3)
 	`, orderID, savedBy, comment)
 
-	return tx.Commit()
+	// Для external-заказов: синхронизируем расход «Материалы» в workshop_expenses
+	var orderType string
+	tx.QueryRowContext(ctx,
+		`SELECT order_type FROM orders WHERE id = $1`, orderID,
+	).Scan(&orderType)
+	if orderType == "external" {
+		syncMaterialsExpense(ctx, tx, orderID, totalMaterials)
+	}
+
+	return groupAmounts, tx.Commit()
+}
+
+// syncMaterialsExpense — для external-заказов удаляет старую авто-запись
+// расхода материалов и создаёт новую с актуальной суммой.
+func syncMaterialsExpense(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}, orderID string, matTotal float64) {
+	// Удаляем старую авто-запись (если была)
+	db.ExecContext(ctx, `
+		DELETE FROM workshop_expenses
+		WHERE order_id = $1 AND description = 'Материалы по заказу (авто)'
+	`, orderID)
+
+	if matTotal > 0 {
+		db.ExecContext(ctx, `
+			INSERT INTO workshop_expenses
+				(expense_date, category, description, amount, order_id)
+			VALUES (CURRENT_DATE, 'Материалы', 'Материалы по заказу (авто)', $1, $2)
+		`, matTotal, orderID)
+	}
 }

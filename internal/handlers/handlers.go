@@ -405,4 +405,39 @@ func (h *TasksHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
+// ── OrderHandler: ServiceLinks ────────────────────────────────
+
+// GET /api/orders/:order_id/service-links
+func (h *OrderHandler) ServiceLinks(c *gin.Context) {
+	links, err := h.repo.ServiceLinksByParent(c, c.Param("order_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if links == nil {
+		links = []models.OrderServiceLink{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": links})
+}
+
+// PUT /api/orders/:id/project
+func (h *OrderHandler) LinkProject(c *gin.Context) {
+	claims := middleware.GetClaims(c)
+
+	var req struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.repo.LinkProject(c.Request.Context(), c.Param("order_id"), req.ProjectID, claims.UserID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 var _ = sql.ErrNoRows

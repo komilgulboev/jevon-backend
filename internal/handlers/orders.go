@@ -157,7 +157,8 @@ func (h *OrderHandler) OrderCancel(c *gin.Context) {
 
 // GET /api/orders/stats
 func (h *OrderHandler) OrderStats(c *gin.Context) {
-	stats, err := h.repo.Stats(c)
+	claims := middleware.GetClaims(c)
+	stats, err := h.repo.Stats(c, claims.UserID, claims.RoleName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

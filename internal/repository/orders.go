@@ -165,7 +165,8 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 			COALESCE(CAST(o.manager_id AS TEXT),''),
 			COALESCE(u.full_name,''),
 			COALESCE(CAST(o.created_by AS TEXT),''),
-			o.created_at
+			o.created_at,
+			COALESCE(CAST(o.parent_order_id AS TEXT),'')
 		FROM orders o
 		LEFT JOIN clients c ON c.id = o.client_id
 		LEFT JOIN users u   ON u.id = o.manager_id
@@ -178,11 +179,11 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 		query += fmt.Sprintf(`
 			AND o.id IN (
 				SELECT DISTINCT order_id FROM order_stages
-				WHERE assigned_to = $%d
+				WHERE assigned_to = $%d AND status != 'done'
 				UNION
 				SELECT DISTINCT os.order_id FROM order_stages os
 				JOIN order_stage_assignees osa ON osa.stage_id = os.id
-				WHERE osa.user_id = $%d
+				WHERE osa.user_id = $%d AND os.status != 'done'
 			)`, n, n)
 		args = append(args, userID)
 		n++
@@ -226,6 +227,7 @@ func (r *OrderRepo) OrderList(ctx context.Context, userID, roleName, orderType, 
 			&o.PaidAmount, &o.PaymentStatus,
 			&o.ManagerID, &o.ManagerName,
 			&o.CreatedBy, &o.CreatedAt,
+			&o.ParentOrderID,
 		)
 		if deadline.Valid {
 			o.Deadline = &deadline.String
@@ -258,10 +260,13 @@ func (r *OrderRepo) OrderByID(ctx context.Context, id string) (*models.Order, er
 			COALESCE(CAST(o.manager_id AS TEXT),''),
 			COALESCE(u.full_name,''),
 			COALESCE(CAST(o.created_by AS TEXT),''),
-			o.created_at
+			o.created_at,
+			COALESCE(CAST(o.project_id AS TEXT),''),
+			COALESCE(p.title,'')
 		FROM orders o
-		LEFT JOIN clients c ON c.id = o.client_id
-		LEFT JOIN users u   ON u.id = o.manager_id
+		LEFT JOIN clients c  ON c.id = o.client_id
+		LEFT JOIN users u    ON u.id = o.manager_id
+		LEFT JOIN projects p ON p.id = o.project_id
 		WHERE o.id = $1
 	`, id).Scan(
 		&o.ID, &o.OrderNumber, &o.OrderType,
@@ -275,6 +280,7 @@ func (r *OrderRepo) OrderByID(ctx context.Context, id string) (*models.Order, er
 		&o.DistanceKm, &o.FuelExpense,
 		&o.ManagerID, &o.ManagerName,
 		&o.CreatedBy, &o.CreatedAt,
+		&o.ProjectID, &o.ProjectTitle,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -296,21 +302,37 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 		INSERT INTO orders
 			(order_type, client_id, client_name, client_phone,
 			 title, description, address, location_url, priority, deadline,
-			 estimated_cost, manager_id, created_by, status, current_stage)
+			 estimated_cost, manager_id, created_by, status, current_stage,
+			 project_id)
 		VALUES
 			($1,
 			 NULLIF($2,'')::uuid, NULLIF($3,''), NULLIF($4,''),
 			 $5, $6, $7, NULLIF($8,''), $9, NULLIF($10,'')::date,
 			 $11, NULLIF($12,'')::uuid, NULLIF($13,'')::uuid,
-			 'new', 'intake')
+			 'new', 'intake',
+			 NULLIF($14,'')::uuid)
 		RETURNING id
 	`, req.OrderType,
 		clientID, req.ClientName, req.ClientPhone,
 		req.Title, req.Description, req.Address, req.LocationURL,
 		req.Priority, req.Deadline,
 		req.EstimatedCost, req.ManagerID, createdBy,
+		req.ProjectID,
 	).Scan(&id)
-	return id, err
+
+	if err != nil {
+		return "", err
+	}
+
+	if req.ProjectID != "" && id != "" {
+		r.db.ExecContext(ctx, `
+			INSERT INTO project_orders (project_id, order_id)
+			VALUES ($1::uuid, $2::uuid)
+			ON CONFLICT DO NOTHING
+		`, req.ProjectID, id)
+	}
+
+	return id, nil
 }
 
 func (r *OrderRepo) OrderUpdate(ctx context.Context, id string, req models.UpdateOrderRequest, updatedBy string) error {
@@ -423,8 +445,6 @@ func (r *OrderRepo) StagesByOrder(ctx context.Context, orderID, userID, roleName
 	var err error
 
 	if isRestricted {
-		// Показываем только этапы где пользователь назначен
-		// (через assigned_to или через order_stage_assignees)
 		query := base + ` AND (
 			os.assigned_to = $2::uuid
 			OR os.id IN (
@@ -709,8 +729,24 @@ type OrderStats struct {
 	CNCCount      int     `json:"cnc_count"`
 }
 
-func (r *OrderRepo) Stats(ctx context.Context) (*OrderStats, error) {
+func (r *OrderRepo) Stats(ctx context.Context, userID, roleName string) (*OrderStats, error) {
 	var s OrderStats
+
+	whereClause := "WHERE status != 'cancelled'"
+	args := []interface{}{}
+
+	if roleName != "admin" && roleName != "supervisor" && roleName != "manager" {
+		whereClause += ` AND id IN (
+			SELECT DISTINCT order_id FROM order_stages
+			WHERE assigned_to = $1 AND status != 'done'
+			UNION
+			SELECT DISTINCT os.order_id FROM order_stages os
+			JOIN order_stage_assignees osa ON osa.stage_id = os.id
+			WHERE osa.user_id = $1 AND os.status != 'done'
+		)`
+		args = append(args, userID)
+	}
+
 	err := r.db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*)                                             AS total,
@@ -723,8 +759,9 @@ func (r *OrderRepo) Stats(ctx context.Context) (*OrderStats, error) {
 			COUNT(*) FILTER (WHERE order_type = 'cutting')     AS cutting,
 			COUNT(*) FILTER (WHERE order_type = 'painting')    AS painting,
 			COUNT(*) FILTER (WHERE order_type = 'cnc')         AS cnc
-		FROM orders WHERE status != 'cancelled'
-	`).Scan(
+		FROM orders `+whereClause,
+		args...,
+	).Scan(
 		&s.TotalOrders, &s.ActiveOrders, &s.DoneOrders,
 		&s.UnpaidOrders, &s.TotalRevenue, &s.TotalDebt,
 		&s.WorkshopCount, &s.CuttingCount, &s.PaintingCount, &s.CNCCount,
@@ -981,4 +1018,69 @@ func (r *OrderRepo) ExpensesTotal(ctx context.Context, orderID string) (float64,
 		SELECT COALESCE(SUM(amount), 0) FROM order_expenses WHERE order_id = $1
 	`, orderID).Scan(&total)
 	return total, err
+}
+
+// ── Привязка к проекту ────────────────────────────────────
+
+func (r *OrderRepo) LinkProject(ctx context.Context, orderID, projectID, changedBy string) error {
+	var oldProjectID, oldProjectName string
+	r.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(CAST(o.project_id AS TEXT), ''),
+			COALESCE(p.title, '')
+		FROM orders o
+		LEFT JOIN projects p ON p.id = o.project_id
+		WHERE o.id = $1
+	`, orderID).Scan(&oldProjectID, &oldProjectName)
+
+	if projectID == "" {
+		if _, err := r.db.ExecContext(ctx,
+			`UPDATE orders SET project_id = NULL, updated_at = NOW() WHERE id = $1`, orderID,
+		); err != nil {
+			return err
+		}
+		if oldProjectID != "" {
+			r.db.ExecContext(ctx,
+				`DELETE FROM project_orders WHERE project_id = $1::uuid AND order_id = $2::uuid`,
+				oldProjectID, orderID,
+			)
+		}
+	} else {
+		if _, err := r.db.ExecContext(ctx,
+			`UPDATE orders SET project_id = $1::uuid, updated_at = NOW() WHERE id = $2`,
+			projectID, orderID,
+		); err != nil {
+			return err
+		}
+		if oldProjectID != "" && oldProjectID != projectID {
+			r.db.ExecContext(ctx,
+				`DELETE FROM project_orders WHERE project_id = $1::uuid AND order_id = $2::uuid`,
+				oldProjectID, orderID,
+			)
+		}
+		r.db.ExecContext(ctx, `
+			INSERT INTO project_orders (project_id, order_id)
+			VALUES ($1::uuid, $2::uuid)
+			ON CONFLICT DO NOTHING
+		`, projectID, orderID)
+	}
+
+	var comment string
+	if projectID == "" {
+		comment = "🔗 Заказ откреплён от проекта: " + oldProjectName
+	} else {
+		var newName string
+		r.db.QueryRowContext(ctx, `SELECT title FROM projects WHERE id = $1`, projectID).Scan(&newName)
+		if oldProjectID == "" {
+			comment = "🔗 Заказ прикреплён к проекту: " + newName
+		} else {
+			comment = "🔗 Проект изменён: " + oldProjectName + " → " + newName
+		}
+	}
+	r.db.ExecContext(ctx, `
+		INSERT INTO order_history (order_id, from_stage, to_stage, changed_by, comment)
+		VALUES ($1, 'project', 'project', NULLIF($2,'')::uuid, $3)
+	`, orderID, changedBy, comment)
+
+	return nil
 }
