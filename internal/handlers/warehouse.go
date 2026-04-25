@@ -385,3 +385,19 @@ func (h *WarehouseHandler) PaymentDelete(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "удалено"})
 }
+
+// GET /api/warehouse/report
+func (h *WarehouseHandler) Report(c *gin.Context) {
+	report, err := h.repo.Report(
+		c,
+		c.Query("date_from"),
+		c.Query("date_to"),
+		c.Query("item_id"),
+		c.Query("category"),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, report)
+}

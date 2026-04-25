@@ -212,13 +212,18 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		}
 	}
 
-	// Берём totalPrice из БД (area_m2 и total_price — GENERATED колонки)
-	var totalPrice float64
-	tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(total_price), 0)
-		FROM order_detail_estimates
-		WHERE order_id = $1::uuid AND service_type = $2
-	`, orderID, req.ServiceType).Scan(&totalPrice)
+// Для строк с нулевыми размерами (cutting из EstimateTable) считаем quantity*unit_price
+var totalPrice float64
+tx.QueryRowContext(ctx, `
+    SELECT COALESCE(SUM(
+        CASE
+            WHEN width_mm > 0 AND height_mm > 0 THEN total_price
+            ELSE quantity * unit_price
+        END
+    ), 0)
+    FROM order_detail_estimates
+    WHERE order_id = $1::uuid AND service_type = $2
+`, orderID, req.ServiceType).Scan(&totalPrice)
 
 	// 3. Upsert настроек раздела
 	s := req.Settings
@@ -252,15 +257,16 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		VALUES ($1::uuid, 'estimate', 'estimate', NULLIF($2,'')::uuid, $3)
 	`, orderID, savedBy, comment)
 
-	// 5. Обновляем estimated_cost
-	tx.ExecContext(ctx, `
-		UPDATE orders SET estimated_cost = (
-			SELECT COALESCE(SUM(total_price), 0)
-			FROM order_detail_estimates
-			WHERE order_id = $1::uuid
-		)
-		WHERE id = $1::uuid
-	`, orderID)
+	// 5. Обновляем estimated_cost только для external заказов
+tx.ExecContext(ctx, `
+    UPDATE orders SET estimated_cost = (
+        SELECT COALESCE(SUM(total_price), 0)
+        FROM order_detail_estimates
+        WHERE order_id = $1::uuid
+    )
+    WHERE id = $1::uuid
+      AND order_type = 'external'
+`, orderID)
 
 	// 6. Синхронизируем этапы сметы
 	r.stagesRepo.EnsureStagesForSection(ctx, orderID, req.ServiceType)
@@ -280,7 +286,14 @@ func (r *DetailEstimateRepo) SaveSection(ctx context.Context, orderID, savedBy s
 		syncMaterialsExpense(ctx, tx, orderID, matTotal)
 	}
 
-	return totalPrice, tx.Commit()
+	if err := tx.Commit(); err != nil {
+    return 0, err
+}
+
+// Для external-заказов: добавляем этапы динамически из сметы
+r.EnsureExternalStagesFromEstimate(ctx, orderID)
+
+return totalPrice, nil
 }
 
 // DeleteSection — удаляет раздел сметы
@@ -335,6 +348,105 @@ func (r *DetailEstimateRepo) CopyToChildOrder(ctx context.Context, parentOrderID
 	`, parentOrderID, childOrderID, serviceType)
 	if err != nil {
 		return fmt.Errorf("copy settings: %w", err)
+	}
+
+	return nil
+}
+// EnsureExternalStagesFromEstimate — добавляет этапы в external-заказ
+// динамически на основе сохранённых разделов сметы.
+// Вызывается после каждого SaveSection.
+//
+// Порядок этапов external:
+//   1-intake  2-design  3-production
+//   4-sawing  5-edging  6-drilling  7-painting
+//   8-packing  9-handover
+func (r *DetailEstimateRepo) EnsureExternalStagesFromEstimate(ctx context.Context, orderID string) error {
+	// Проверяем тип заказа
+	var orderType string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT order_type FROM orders WHERE id = $1::uuid`, orderID,
+	).Scan(&orderType)
+	if err != nil || orderType != "external" {
+		return nil
+	}
+
+	// Какие service_type есть в смете этого заказа
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT service_type
+		FROM order_detail_estimates
+		WHERE order_id = $1::uuid
+	`, orderID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	hasService := map[string]bool{}
+	for rows.Next() {
+		var st string
+		if rows.Scan(&st) == nil {
+			hasService[st] = true
+		}
+	}
+
+	// Фиксированный порядок всех возможных этапов external
+	type stageEntry struct {
+		stage string
+		order int
+	}
+	allStages := []stageEntry{
+		{"intake",      1},
+		{"design",      2},
+		{"production",  3},
+		{"sawing",      4}, // только если есть cutting в смете
+		{"edging",      5}, // только если есть cutting в смете
+		{"drilling",    6}, // только если есть cutting в смете
+		{"painting",    7}, // только если есть painting в смете
+		{"packing",     8},
+		{"handover",    9},
+	}
+
+	// Какие этапы добавлять динамически
+	dynamicMap := map[string]string{
+		"sawing":   "cutting",  // этап sawing появляется если есть секция cutting
+		"edging":   "cutting",
+		"drilling": "cutting",
+		"painting": "painting", // этап painting появляется если есть секция painting
+	}
+
+	for _, e := range allStages {
+		// Для динамических этапов проверяем наличие секции в смете
+		if requiredService, isDynamic := dynamicMap[e.stage]; isDynamic {
+			if !hasService[requiredService] {
+				continue
+			}
+		}
+
+		// INSERT с правильным stage_order, обновляем порядок если этап уже есть
+		r.db.ExecContext(ctx, `
+			INSERT INTO order_stages (order_id, stage, stage_order, status)
+			VALUES ($1::uuid, $2, $3, 'pending')
+			ON CONFLICT (order_id, stage) DO UPDATE SET
+				stage_order = EXCLUDED.stage_order
+		`, orderID, e.stage, e.order)
+	}
+
+	// Если нет ни одного in_progress — активируем первый pending
+	var countInProgress int
+	r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM order_stages
+		WHERE order_id = $1::uuid AND status = 'in_progress'
+	`, orderID).Scan(&countInProgress)
+
+	if countInProgress == 0 {
+		r.db.ExecContext(ctx, `
+			UPDATE order_stages SET status = 'in_progress'
+			WHERE order_id = $1::uuid
+			  AND stage_order = (
+			  	SELECT MIN(stage_order) FROM order_stages
+			  	WHERE order_id = $1::uuid AND status = 'pending'
+			  )
+		`, orderID)
 	}
 
 	return nil

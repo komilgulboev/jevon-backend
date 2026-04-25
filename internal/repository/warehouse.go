@@ -945,3 +945,4 @@ func (r *WarehouseRepo) ReceiptPaymentDelete(ctx context.Context, paymentID stri
 func warehouseItoa(i int) string {
 	return strconv.Itoa(i)
 }
+

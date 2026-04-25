@@ -311,7 +311,8 @@ func main() {
 	// ════════════════════════════════════════════════════════════
 	p.GET("/warehouse/units",      warehouseH.UnitList)
 	p.GET("/warehouse/categories", warehouseH.CategoryList)
-
+// Добавить ПЕРЕД /:id роутами
+p.GET("/warehouse/report", warehouseH.Report)
 	p.GET("/warehouse/items",        warehouseH.ItemList)
 	p.GET("/warehouse/items/:id",    warehouseH.ItemGet)
 	p.POST("/warehouse/items",       middleware.RequireRole("admin", "supervisor"), warehouseH.ItemCreate)

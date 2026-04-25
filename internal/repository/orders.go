@@ -324,12 +324,35 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 		return "", err
 	}
 
+	// Привязка к проекту
 	if req.ProjectID != "" && id != "" {
 		r.db.ExecContext(ctx, `
 			INSERT INTO project_orders (project_id, order_id)
 			VALUES ($1::uuid, $2::uuid)
 			ON CONFLICT DO NOTHING
 		`, req.ProjectID, id)
+	}
+
+	// Создаём этапы в правильном порядке через StagesByType (слайс).
+	// workshop и external имеют разные наборы и порядок этапов.
+	stages := models.StagesByType[req.OrderType]
+	if len(stages) == 0 {
+		stages = models.StagesByType["workshop"] // fallback
+	}
+	for i, stage := range stages {
+		r.db.ExecContext(ctx, `
+			INSERT INTO order_stages (order_id, stage, stage_order, status)
+			VALUES ($1::uuid, $2, $3, 'pending')
+			ON CONFLICT DO NOTHING
+		`, id, stage, i+1)
+	}
+
+	// Первый этап сразу in_progress
+	if len(stages) > 0 {
+		r.db.ExecContext(ctx, `
+			UPDATE order_stages SET status = 'in_progress'
+			WHERE order_id = $1::uuid AND stage = $2
+		`, id, stages[0])
 	}
 
 	return id, nil

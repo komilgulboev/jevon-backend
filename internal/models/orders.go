@@ -84,7 +84,7 @@ type Order struct {
 	ManagerID     string    `json:"manager_id"`
 	ManagerName   string    `json:"manager_name"`
 	CreatedBy     string    `json:"created_by"`
-	ParentOrderID string `json:"parent_order_id"`
+	ParentOrderID string    `json:"parent_order_id"`
 	CreatedAt     time.Time `json:"created_at"`
 	ProjectID     string    `json:"project_id"`
 	ProjectTitle  string    `json:"project_title"`
@@ -291,43 +291,87 @@ type OrderHistory struct {
 
 // ── Лейблы ───────────────────────────────────────────────
 
-// OrderTypeLabels — два типа: цех и вне цеха
 var OrderTypeLabels = map[string]string{
 	"workshop": "Заказ цеха",
 	"external": "Заказ вне цеха",
 }
 
-// StageLabelsByType — одинаковые этапы для обоих типов
+// StageLabelsByType — лейблы для отображения названий этапов
 var StageLabelsByType = map[string]map[string]string{
-    "workshop": {
-        // Основные этапы заказа
-        "intake":     "Приём заказа",
-        "measure":    "Замер",
-        "design":     "Дизайн/Смета",
-        "purchase":   "Закупка",
-        "production": "Производство",
-        "assembly":   "Сборка",
-        "delivery":   "Доставка",
-        "handover":   "Сдача клиенту",
-        // Под-этапы Распила
-        "material":   "Приём материала",
-        "sawing":     "Распил",
-        "edging":     "Кромкование",
-        "drilling":   "Присадка",
-        "packing":    "Упаковка",
-        "shipment":   "Отгрузка",
-        // Под-этапы Покраски
-        "calculate":  "Расчёт",
-        "sanding":    "Шлифовка",
-        "priming":    "Грунтовка",
-        "painting":   "Покраска",
-        // Под-этапы ЧПУ
-        "cnc_work":   "Фрезеровка",
-        // Под-этапы Мягкой мебели
-        "assign":     "Назначение мастера",
-        "work":       "Работа",
-    },
-    "external": { /* те же самые */ },
+	"workshop": {
+		"intake": "Приём заказа", "measure": "Замер", "design": "Дизайн/Смета",
+		"purchase": "Закупка", "production": "Производство", "assembly": "Сборка",
+		"delivery": "Доставка", "handover": "Сдача клиенту",
+		"material": "Приём материала", "sawing": "Распил", "edging": "Кромкование",
+		"drilling": "Присадка", "packing": "Упаковка", "shipment": "Отгрузка",
+		"calculate": "Расчёт", "sanding": "Шлифовка", "priming": "Грунтовка",
+		"painting": "Покраска", "cnc_work": "Фрезеровка",
+		"assign": "Назначение мастера", "work": "Работа",
+	},
+	"external": {
+		"intake": "Приём заказа", "design": "Чертёж/Смета", "production": "Производство",
+		"sawing": "Распил", "edging": "Кромкование", "drilling": "Присадка",
+		"packing": "Упаковка", "handover": "Сдача клиенту",
+	},
+	"cutting": {
+		"material": "Приём материала", "sawing": "Распил", "edging": "Кромкование",
+		"drilling": "Присадка", "packing": "Упаковка", "shipment": "Отгрузка",
+	},
+	"painting": {
+		"sanding": "Шлифовка", "priming": "Грунтовка",
+		"painting": "Покраска", "delivery": "Выдача",
+	},
+	"cnc": {
+		"calculate": "Расчёт", "cnc_work": "Фрезеровка", "delivery": "Выдача",
+	},
+	"soft_fabric": {
+		"calculate": "Расчёт", "work": "Работа", "delivery": "Выдача",
+	},
+}
+
+// StagesByType — упорядоченные слайсы этапов для создания заказа.
+// Используй этот map вместо StageLabelsByType когда нужен порядок.
+//
+// Для external базовые этапы:
+//   intake → design → production → packing → handover
+// Дополнительные (sawing, edging, drilling) вставляются динамически
+// через EnsureExternalStagesFromEstimate после сохранения сметы.
+var StagesByType = map[string][]string{
+	"workshop": {
+		"intake", "measure", "design", "purchase",
+		"production", "assembly", "delivery", "handover",
+	},
+	// Базовые этапы external — без распила/кромки/присадки.
+	// Они добавляются динамически из сметы (EnsureExternalStagesFromEstimate).
+	"external": {
+		"intake", "design", "production", "packing", "handover",
+	},
+	"cutting": {
+		"material", "sawing", "edging", "drilling", "packing", "shipment",
+	},
+	"painting": {
+		"sanding", "priming", "painting", "delivery",
+	},
+	"cnc": {
+		"calculate", "cnc_work", "delivery",
+	},
+	"soft_fabric": {
+		"calculate", "work", "delivery",
+	},
+}
+
+// ExternalDynamicStages — этапы которые добавляются в external-заказ
+// динамически из сметы, с их позицией между production и packing.
+// stage → stage_order (фиксированный, чтобы порядок был правильным)
+var ExternalDynamicStageOrder = map[string]int{
+	"intake":      1,
+	"design":      2,
+	"production":  3,
+	"sawing":      4,
+	"edging":      5,
+	"drilling":    6,
+	"packing":     7,
+	"handover":    8,
 }
 
 var StageRoles = map[string][]string{
