@@ -332,10 +332,10 @@ func (r *EstimateRepo) SaveEstimate(ctx context.Context, orderID, savedBy string
 
 	total := totalServices + totalMaterials
 	if total > 0 {
-		tx.ExecContext(ctx,
-			`UPDATE orders SET estimated_cost = $1 WHERE id = $2`,
-			total, orderID)
-	}
+    tx.ExecContext(ctx,
+        `UPDATE orders SET estimated_cost = $1 WHERE id = $2 AND order_type = 'external'`,
+        total, orderID)
+}
 
 	comment := fmt.Sprintf("📋 Смета обновлена: услуг %d | материалов %d | итого %.0f сом.",
 		len(req.Services), len(req.Materials), total)

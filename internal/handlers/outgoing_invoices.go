@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"net/http"
 
 	"jevon/internal/middleware"
@@ -21,7 +20,6 @@ func NewOutgoingInvoiceHandler(repo *repository.OutgoingInvoiceRepo) *OutgoingIn
 func (h *OutgoingInvoiceHandler) List(c *gin.Context) {
 	invoices, err := h.repo.List(c, c.Query("status"), c.Query("order_id"))
 	if err != nil {
-		log.Printf("❌ OutgoingInvoice List error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -34,7 +32,6 @@ func (h *OutgoingInvoiceHandler) List(c *gin.Context) {
 func (h *OutgoingInvoiceHandler) Get(c *gin.Context) {
 	inv, err := h.repo.GetByID(c, c.Param("id"))
 	if err != nil {
-		log.Printf("❌ OutgoingInvoice Get error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -58,7 +55,6 @@ func (h *OutgoingInvoiceHandler) Create(c *gin.Context) {
 	}
 	inv, err := h.repo.Create(c, req, claims.UserID)
 	if err != nil {
-		log.Printf("❌ OutgoingInvoice Create error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -67,23 +63,62 @@ func (h *OutgoingInvoiceHandler) Create(c *gin.Context) {
 
 func (h *OutgoingInvoiceHandler) Confirm(c *gin.Context) {
 	id := c.Param("id")
-	log.Printf("🔄 Confirm invoice: %s", id)
 	result, err := h.repo.Confirm(c, id)
 	if err != nil {
-		log.Printf("❌ Confirm error for %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("✅ Confirm result: status=%s", result.Status)
 	c.JSON(http.StatusOK, result)
 }
 
 func (h *OutgoingInvoiceHandler) Cancel(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.repo.Cancel(c, id); err != nil {
-		log.Printf("❌ Cancel error for %s: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "отменено"})
+}
+
+// ── Управление позициями накладной ────────────────────────────
+
+// POST /warehouse/outgoing-invoices/:id/items
+func (h *OutgoingInvoiceHandler) ItemAdd(c *gin.Context) {
+	claims := middleware.GetClaims(c)
+	var req repository.OutgoingInvoiceItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	inv, err := h.repo.ItemAdd(c, c.Param("id"), claims.UserID, req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, inv)
+}
+
+// PUT /warehouse/outgoing-invoices/:id/items/:item_id
+func (h *OutgoingInvoiceHandler) ItemUpdate(c *gin.Context) {
+	var req repository.OutgoingInvoiceItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	inv, err := h.repo.ItemUpdate(c, c.Param("id"), c.Param("item_id"), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, inv)
+}
+
+// DELETE /warehouse/outgoing-invoices/:id/items/:item_id
+func (h *OutgoingInvoiceHandler) ItemDelete(c *gin.Context) {
+	inv, err := h.repo.ItemDelete(c, c.Param("id"), c.Param("item_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, inv)
 }

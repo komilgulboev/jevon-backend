@@ -324,7 +324,6 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 		return "", err
 	}
 
-	// Привязка к проекту
 	if req.ProjectID != "" && id != "" {
 		r.db.ExecContext(ctx, `
 			INSERT INTO project_orders (project_id, order_id)
@@ -333,11 +332,9 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 		`, req.ProjectID, id)
 	}
 
-	// Создаём этапы в правильном порядке через StagesByType (слайс).
-	// workshop и external имеют разные наборы и порядок этапов.
 	stages := models.StagesByType[req.OrderType]
 	if len(stages) == 0 {
-		stages = models.StagesByType["workshop"] // fallback
+		stages = models.StagesByType["workshop"]
 	}
 	for i, stage := range stages {
 		r.db.ExecContext(ctx, `
@@ -347,7 +344,6 @@ func (r *OrderRepo) OrderCreate(ctx context.Context, req models.CreateOrderReque
 		`, id, stage, i+1)
 	}
 
-	// Первый этап сразу in_progress
 	if len(stages) > 0 {
 		r.db.ExecContext(ctx, `
 			UPDATE order_stages SET status = 'in_progress'
@@ -795,19 +791,22 @@ func (r *OrderRepo) Stats(ctx context.Context, userID, roleName string) (*OrderS
 // ── Материалы заказа ─────────────────────────────────────
 
 type OrderMaterial struct {
-	ID         string  `json:"id"`
-	OrderID    string  `json:"order_id"`
-	StageID    string  `json:"stage_id"`
-	StageName  string  `json:"stage_name"`
-	Name       string  `json:"name"`
-	Quantity   float64 `json:"quantity"`
-	Unit       string  `json:"unit"`
-	UnitPrice  float64 `json:"unit_price"`
-	TotalPrice float64 `json:"total_price"`
-	Supplier   string  `json:"supplier"`
-	Notes      string  `json:"notes"`
-	CreatedBy  string  `json:"created_by"`
-	CreatedAt  string  `json:"created_at"`
+	ID            string  `json:"id"`
+	OrderID       string  `json:"order_id"`
+	StageID       string  `json:"stage_id"`
+	StageName     string  `json:"stage_name"`
+	Name          string  `json:"name"`
+	Quantity      float64 `json:"quantity"`
+	Unit          string  `json:"unit"`
+	UnitPrice     float64 `json:"unit_price"`
+	TotalPrice    float64 `json:"total_price"`
+	Supplier      string  `json:"supplier"`
+	Notes         string  `json:"notes"`
+	CreatedBy     string  `json:"created_by"`
+	CreatedAt     string  `json:"created_at"`
+	ItemID        string  `json:"item_id"`
+	InvoiceID     string  `json:"invoice_id"`
+	InvoiceNumber string  `json:"invoice_number"`
 }
 
 type CreateOrderMaterialRequest struct {
@@ -819,6 +818,7 @@ type CreateOrderMaterialRequest struct {
 	UnitPrice float64 `json:"unit_price"`
 	Supplier  string  `json:"supplier"`
 	Notes     string  `json:"notes"`
+	ItemID    string  `json:"item_id"`
 }
 
 func (r *OrderRepo) MaterialsByOrder(ctx context.Context, orderID string) ([]OrderMaterial, float64, error) {
@@ -831,6 +831,9 @@ func (r *OrderRepo) MaterialsByOrder(ctx context.Context, orderID string) ([]Ord
 			COALESCE(unit_price,0), COALESCE(total_price,0),
 			COALESCE(supplier,''), COALESCE(notes,''),
 			COALESCE(CAST(created_by AS TEXT),''),
+			COALESCE(CAST(item_id AS TEXT),''),
+			COALESCE(CAST(invoice_id AS TEXT),''),
+			COALESCE(invoice_number,''),
 			CAST(created_at AS TEXT)
 		FROM order_materials
 		WHERE order_id = $1
@@ -849,7 +852,9 @@ func (r *OrderRepo) MaterialsByOrder(ctx context.Context, orderID string) ([]Ord
 			&m.ID, &m.OrderID, &m.StageID, &m.StageName,
 			&m.Name, &m.Quantity, &m.Unit,
 			&m.UnitPrice, &m.TotalPrice,
-			&m.Supplier, &m.Notes, &m.CreatedBy, &m.CreatedAt,
+			&m.Supplier, &m.Notes, &m.CreatedBy,
+			&m.ItemID, &m.InvoiceID, &m.InvoiceNumber,
+			&m.CreatedAt,
 		)
 		total += m.TotalPrice
 		result = append(result, m)
@@ -858,18 +863,24 @@ func (r *OrderRepo) MaterialsByOrder(ctx context.Context, orderID string) ([]Ord
 }
 
 func (r *OrderRepo) MaterialCreate(ctx context.Context, orderID, createdBy string, req CreateOrderMaterialRequest) (string, error) {
-	if req.Unit == "" { req.Unit = "шт" }
+	if req.Unit == "" {
+		req.Unit = "шт"
+	}
 
 	var id string
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO order_materials
-			(order_id, stage_id, stage_name, name, quantity, unit, unit_price, supplier, notes, created_by)
+			(order_id, stage_id, stage_name, name, quantity, unit, unit_price,
+			 supplier, notes, created_by, item_id)
 		VALUES
-			($1, NULLIF($2,'')::uuid, NULLIF($3,''), $4, $5, $6, $7, NULLIF($8,''), NULLIF($9,''), NULLIF($10,'')::uuid)
+			($1, NULLIF($2,'')::uuid, NULLIF($3,''), $4, $5, $6, $7,
+			 NULLIF($8,''), NULLIF($9,''), NULLIF($10,'')::uuid,
+			 NULLIF($11,'')::uuid)
 		RETURNING id
 	`, orderID, req.StageID, req.StageName, req.Name,
 		req.Quantity, req.Unit, req.UnitPrice,
 		req.Supplier, req.Notes, createdBy,
+		req.ItemID,
 	).Scan(&id)
 
 	if err != nil {

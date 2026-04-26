@@ -107,9 +107,7 @@ func main() {
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// ════════════════════════════════════════════════════════════
-	// PROXY для MinIO — отдаёт файлы через бэкенд без открытия
-	// прямого доступа к MinIO серверу
-	// URL формат: /files/{bucket}/{folder}/{uuid.ext}
+	// PROXY для MinIO
 	// ════════════════════════════════════════════════════════════
 	r.GET("/files/*path", func(c *gin.Context) {
 		if minioSvc == nil {
@@ -311,8 +309,8 @@ func main() {
 	// ════════════════════════════════════════════════════════════
 	p.GET("/warehouse/units",      warehouseH.UnitList)
 	p.GET("/warehouse/categories", warehouseH.CategoryList)
-// Добавить ПЕРЕД /:id роутами
-p.GET("/warehouse/report", warehouseH.Report)
+	p.GET("/warehouse/report",     warehouseH.Report)
+
 	p.GET("/warehouse/items",        warehouseH.ItemList)
 	p.GET("/warehouse/items/:id",    warehouseH.ItemGet)
 	p.POST("/warehouse/items",       middleware.RequireRole("admin", "supervisor"), warehouseH.ItemCreate)
@@ -332,8 +330,9 @@ p.GET("/warehouse/report", warehouseH.Report)
 	p.DELETE("/warehouse/suppliers/:id/payments/:payment_id",
 		middleware.RequireRole("admin", "supervisor"), warehouseH.SupplierPaymentDelete)
 
-	p.GET("/warehouse/receipts",             warehouseH.ReceiptList)
+	// Приходные накладные
 	p.GET("/warehouse/receipts/next-number", warehouseH.ReceiptNextNumber)
+	p.GET("/warehouse/receipts",             warehouseH.ReceiptList)
 	p.GET("/warehouse/receipts/:id",         warehouseH.ReceiptGet)
 	p.POST("/warehouse/receipts",            middleware.RequireRole("admin", "supervisor"), warehouseH.ReceiptCreate)
 	p.PATCH("/warehouse/receipts/:id",       middleware.RequireRole("admin", "supervisor"), warehouseH.ReceiptUpdate)
@@ -350,6 +349,7 @@ p.GET("/warehouse/report", warehouseH.Report)
 	p.DELETE("/warehouse/receipts/:id/payments/:payment_id",
 		middleware.RequireRole("admin", "supervisor"), warehouseH.PaymentDelete)
 
+	// Расходные накладные
 	p.GET("/warehouse/outgoing-invoices",     outgoingInvoiceH.List)
 	p.GET("/warehouse/outgoing-invoices/:id", outgoingInvoiceH.Get)
 	p.POST("/warehouse/outgoing-invoices",
@@ -358,6 +358,14 @@ p.GET("/warehouse/report", warehouseH.Report)
 		middleware.RequireRole("admin", "supervisor", "manager", "seller"), outgoingInvoiceH.Confirm)
 	p.POST("/warehouse/outgoing-invoices/:id/cancel",
 		middleware.RequireRole("admin", "supervisor"), outgoingInvoiceH.Cancel)
+
+	// Управление позициями расходной накладной
+	p.POST("/warehouse/outgoing-invoices/:id/items",
+		middleware.RequireRole("admin", "supervisor", "warehouse"), outgoingInvoiceH.ItemAdd)
+	p.PUT("/warehouse/outgoing-invoices/:id/items/:item_id",
+		middleware.RequireRole("admin", "supervisor", "warehouse"), outgoingInvoiceH.ItemUpdate)
+	p.DELETE("/warehouse/outgoing-invoices/:id/items/:item_id",
+		middleware.RequireRole("admin", "supervisor", "warehouse"), outgoingInvoiceH.ItemDelete)
 
 	p.DELETE("/files", middleware.RequireRole("admin", "supervisor", "designer"), uploadH.DeleteFile)
 
